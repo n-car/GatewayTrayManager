@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWindowsForms>true</UseWindowsForms>
+    <RootNamespace>ServiceManager</RootNamespace>
+
+    <!-- Assembly Info -->
+    <Product>Service Manager</Product>
+    <Company>Nicola Carpanese</Company>
+    <Description>Base library for Windows service monitoring and management</Description>
+    <Copyright>Copyright © 2024</Copyright>
+    <Version>1.0.0</Version>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.ServiceProcess.ServiceController" Version="8.0.0" />
+  </ItemGroup>
+
+</Project>

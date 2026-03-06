@@ -1,0 +1,26 @@
+# Build artifacts
+**/bin/
+**/obj/
+
+# Visual Studio
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# IDE
+.vscode/
+.idea/
+
+# Installer output
+installer/output/
+release/
+
+# Logs
+*.log
+crash.log
+
+# OS files
+Thumbs.db
+.DS_Store
