@@ -1,12 +1,16 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.ServiceProcess;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using System.Web;
 using ServiceManager;
 
 namespace GatewayTrayManager;
@@ -63,63 +67,311 @@ public sealed class GatewayMonitor : ServiceMonitor
     }
 
     /// <summary>
-    /// Performs form-based login to obtain session cookie.
-    /// Tries multiple known login endpoints for compatibility with different Ignition versions.
+    /// Performs OIDC authentication flow to obtain session cookie.
+    /// Flow: GET /data/app/login → redirect to IdP → challenge/response → session cookie
     /// </summary>
     public async Task<bool> LoginAsync()
     {
         if (string.IsNullOrEmpty(_username) || string.IsNullOrEmpty(_password))
             return false;
 
-        // List of possible login endpoints for different Ignition versions
-        string[] loginEndpoints = 
+        try
         {
-            "data/app/login",      // Standard web app login
-            "web/login",           // Alternative web login
-            "data/login",          // Data API login
-            "login"                // Generic login
-        };
+            // Step 1: GET /data/app/login - this will redirect to IdP
+            var loginUrl = new Uri(_gatewayBase, "data/app/login");
 
-        foreach (var endpoint in loginEndpoints)
-        {
-            try
+            // Don't follow redirects automatically - we need to parse the redirect URL
+            using var handler = new HttpClientHandler
             {
-                var loginUrl = new Uri(_gatewayBase, endpoint);
-                var content = new FormUrlEncodedContent(new[]
-                {
-                    new KeyValuePair<string, string>("username", _username),
-                    new KeyValuePair<string, string>("password", _password)
-                });
+                AllowAutoRedirect = false,
+                CookieContainer = ((HttpClientHandler)GetHandler(_http))?.CookieContainer ?? new System.Net.CookieContainer(),
+                UseCookies = true
+            };
+            using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(30) };
 
-                using var response = await _http.PostAsync(loginUrl, content);
+            var response = await client.GetAsync(loginUrl);
 
-                // Success if 200, 302 (redirect after login), or 303 (see other)
-                if (response.IsSuccessStatusCode || 
-                    response.StatusCode == HttpStatusCode.Found || 
-                    response.StatusCode == HttpStatusCode.SeeOther)
-                {
-                    _isAuthenticated = true;
-                    return true;
-                }
-
-                // If we get 401/403, credentials might be wrong but endpoint exists
-                if (response.StatusCode == HttpStatusCode.Unauthorized || 
-                    response.StatusCode == HttpStatusCode.Forbidden)
-                {
-                    _isAuthenticated = false;
-                    return false; // Credentials wrong, don't try other endpoints
-                }
-
-                // 404 means this endpoint doesn't exist, try next
+            // If we get a direct success or the endpoint doesn't redirect, try simple login
+            if (response.IsSuccessStatusCode)
+            {
+                _isAuthenticated = true;
+                return true;
             }
-            catch
+
+            // Check for redirect to IdP
+            if (response.StatusCode != HttpStatusCode.Found && response.StatusCode != HttpStatusCode.Redirect)
             {
-                // Connection error, try next endpoint
+                // Not a redirect - try fallback to simple form login
+                return await TrySimpleLoginAsync();
+            }
+
+            var redirectUrl = response.Headers.Location;
+            if (redirectUrl == null)
+            {
+                return await TrySimpleLoginAsync();
+            }
+
+            // Make redirect URL absolute if relative
+            if (!redirectUrl.IsAbsoluteUri)
+            {
+                redirectUrl = new Uri(_gatewayBase, redirectUrl);
+            }
+
+            // Step 2: Parse the IdP redirect URL to extract paths and token
+            // Expected format: /idp/<name>/oidc/auth?... (token may be missing here on newer gateways)
+            var idpMatch = Regex.Match(
+                redirectUrl.AbsolutePath, 
+                @"/idp/([^/]+)/oidc/auth");
+
+            if (!idpMatch.Success)
+            {
+                // Not an OIDC IdP redirect - try simple login
+                return await TrySimpleLoginAsync();
+            }
+
+            var idpName = idpMatch.Groups[1].Value;
+            var authnBasePath = $"/idp/{idpName}/authn";
+            var idpBasePath = $"/idp/{idpName}";
+
+            // Token may be present on the first redirect, or on the second redirect to /authn/login.
+            var token = ExtractToken(redirectUrl);
+
+            if (string.IsNullOrEmpty(token))
+            {
+                using var authnRedirectResponse = await client.GetAsync(redirectUrl);
+
+                if (authnRedirectResponse.StatusCode != HttpStatusCode.Found &&
+                    authnRedirectResponse.StatusCode != HttpStatusCode.Redirect)
+                {
+                    return await TrySimpleLoginAsync();
+                }
+
+                var authnLoginUrl = authnRedirectResponse.Headers.Location;
+                if (authnLoginUrl == null)
+                {
+                    return await TrySimpleLoginAsync();
+                }
+
+                if (!authnLoginUrl.IsAbsoluteUri)
+                {
+                    authnLoginUrl = new Uri(_gatewayBase, authnLoginUrl);
+                }
+
+                var authnMatch = Regex.Match(authnLoginUrl.AbsolutePath, @"/idp/([^/]+)/authn/login");
+                if (authnMatch.Success)
+                {
+                    idpName = authnMatch.Groups[1].Value;
+                    authnBasePath = $"/idp/{idpName}/authn";
+                    idpBasePath = $"/idp/{idpName}";
+                }
+
+                token = ExtractToken(authnLoginUrl);
+                if (string.IsNullOrEmpty(token))
+                {
+                    return await TrySimpleLoginAsync();
+                }
+
+                // Load authn/login page to initialize challenge state (matches browser flow).
+                using var authnLoginResponse = await client.GetAsync(authnLoginUrl);
+                if (!authnLoginResponse.IsSuccessStatusCode &&
+                    authnLoginResponse.StatusCode != HttpStatusCode.Found &&
+                    authnLoginResponse.StatusCode != HttpStatusCode.Redirect)
+                {
+                    return false;
+                }
+            }
+
+            var currentToken = token;
+
+            // Step 3: POST /idp/<name>/authn/next-challenge with initial token
+            var nextChallengeUrl = new Uri(_gatewayBase, $"{authnBasePath}/next-challenge");
+            var challengeResult = await PostJsonAsync(client, nextChallengeUrl, new { token = currentToken });
+
+            if (challengeResult == null)
+            {
+                return false;
+            }
+            currentToken = UpdateToken(currentToken, challengeResult.Value);
+
+            // Step 4: POST /idp/<name>/authn/submit-challenge/basic with credentials
+            var submitUrl = new Uri(_gatewayBase, $"{authnBasePath}/submit-challenge/basic");
+            var submitResult = await PostJsonAsync(client, submitUrl, new
+            {
+                token = currentToken,
+                rememberMe = false,
+                challenge = new
+                {
+                    username = _username,
+                    password = _password
+                }
+            });
+
+            if (submitResult == null)
+            {
+                return false;
+            }
+
+            // Check if submit was successful
+            if (!submitResult.Value.TryGetProperty("success", out var successProp) || !successProp.GetBoolean())
+            {
+                _isAuthenticated = false;
+                return false;
+            }
+            currentToken = UpdateToken(currentToken, submitResult.Value);
+
+            // Step 5: POST /idp/<name>/authn/next-challenge to complete
+            var finalChallengeResult = await PostJsonAsync(client, nextChallengeUrl, new { token = currentToken });
+
+            if (finalChallengeResult == null)
+            {
+                return false;
+            }
+
+            // Check if complete
+            if (!finalChallengeResult.Value.TryGetProperty("complete", out var completeProp) || !completeProp.GetBoolean())
+            {
+                // MFA or additional challenge required - not supported
+                _isAuthenticated = false;
+                return false;
+            }
+
+            currentToken = UpdateToken(currentToken, finalChallengeResult.Value);
+
+            // Step 6: Follow the final OIDC redirect to establish session
+            var finalAuthUrl = new Uri(_gatewayBase, $"{idpBasePath}/oidc/auth?token={Uri.EscapeDataString(currentToken)}");
+
+            // Now follow redirects to get the session cookie
+            using var finalHandler = new HttpClientHandler
+            {
+                AllowAutoRedirect = true,
+                CookieContainer = handler.CookieContainer,
+                UseCookies = true
+            };
+            using var finalClient = new HttpClient(finalHandler) { Timeout = TimeSpan.FromSeconds(30) };
+
+            var finalResponse = await finalClient.GetAsync(finalAuthUrl);
+
+            // Copy cookies to our main HttpClient
+            CopyCookies(handler.CookieContainer, _gatewayBase);
+
+            _isAuthenticated = finalResponse.IsSuccessStatusCode || 
+                              finalResponse.StatusCode == HttpStatusCode.Found ||
+                              finalResponse.StatusCode == HttpStatusCode.OK;
+
+            return _isAuthenticated;
+        }
+        catch (Exception)
+        {
+            _isAuthenticated = false;
+            return false;
+        }
+    }
+
+    private static string? ExtractToken(Uri uri)
+    {
+        var queryParams = HttpUtility.ParseQueryString(uri.Query);
+        return queryParams["token"];
+    }
+
+    private static string UpdateToken(string currentToken, JsonElement response)
+    {
+        if (response.TryGetProperty("token", out var tokenProp))
+        {
+            var token = tokenProp.GetString();
+            if (!string.IsNullOrWhiteSpace(token))
+            {
+                return token;
             }
         }
 
-        _isAuthenticated = false;
-        return false;
+        return currentToken;
+    }
+
+    private static HttpMessageHandler? GetHandler(HttpClient client)
+    {
+        try
+        {
+            var field = typeof(HttpMessageInvoker).GetField("_handler", 
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+            return field?.GetValue(client) as HttpMessageHandler;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private void CopyCookies(System.Net.CookieContainer source, Uri uri)
+    {
+        try
+        {
+            var cookies = source.GetCookies(uri);
+            if (_http.DefaultRequestHeaders.Contains("Cookie"))
+            {
+                _http.DefaultRequestHeaders.Remove("Cookie");
+            }
+
+            var cookieHeader = string.Join("; ", cookies.Cast<System.Net.Cookie>().Select(c => $"{c.Name}={c.Value}"));
+            if (!string.IsNullOrEmpty(cookieHeader))
+            {
+                _http.DefaultRequestHeaders.Add("Cookie", cookieHeader);
+            }
+        }
+        catch
+        {
+            // Ignore cookie copy errors
+        }
+    }
+
+    private async Task<JsonElement?> PostJsonAsync(HttpClient client, Uri url, object payload)
+    {
+        try
+        {
+            var json = JsonSerializer.Serialize(payload);
+            var content = new StringContent(json, Encoding.UTF8, "application/json");
+
+            using var response = await client.PostAsync(url, content);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                return null;
+            }
+
+            var responseJson = await response.Content.ReadAsStringAsync();
+            using var doc = JsonDocument.Parse(responseJson);
+            return doc.RootElement.Clone();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private async Task<bool> TrySimpleLoginAsync()
+    {
+        // Fallback to simple form POST login (for non-OIDC gateways)
+        try
+        {
+            var loginUrl = new Uri(_gatewayBase, "data/app/login");
+            var content = new FormUrlEncodedContent(new[]
+            {
+                new KeyValuePair<string, string>("username", _username!),
+                new KeyValuePair<string, string>("password", _password!)
+            });
+
+            using var response = await _http.PostAsync(loginUrl, content);
+
+            _isAuthenticated = response.IsSuccessStatusCode || 
+                              response.StatusCode == HttpStatusCode.Found || 
+                              response.StatusCode == HttpStatusCode.SeeOther;
+
+            return _isAuthenticated;
+        }
+        catch
+        {
+            _isAuthenticated = false;
+            return false;
+        }
     }
 
     /// <summary>
@@ -228,11 +480,11 @@ public sealed class GatewayMonitor : ServiceMonitor
             if (root.TryGetProperty("cpu", out var cpu))
                 info.CpuUsagePercent = cpu.GetDouble();
 
-            if (root.TryGetProperty("heapMemory", out var heapMem))
-                info.HeapMemoryBytes = heapMem.GetInt64();
+            if (TryReadLong(root, "heapMemory", out var heapMem))
+                info.HeapMemoryBytes = heapMem;
 
-            if (root.TryGetProperty("maxMemory", out var maxMem))
-                info.MaxMemoryBytes = maxMem.GetInt64();
+            if (TryReadLong(root, "maxMemory", out var maxMem))
+                info.MaxMemoryBytes = maxMem;
 
             return info;
         }
@@ -240,6 +492,47 @@ public sealed class GatewayMonitor : ServiceMonitor
         {
             return null;
         }
+    }
+
+    private static bool TryReadLong(JsonElement root, string propertyName, out long value)
+    {
+        value = 0;
+
+        if (!root.TryGetProperty(propertyName, out var element))
+            return false;
+
+        if (element.ValueKind == JsonValueKind.Number)
+        {
+            if (element.TryGetInt64(out value))
+                return true;
+
+            if (element.TryGetDouble(out var number) && !double.IsNaN(number) && !double.IsInfinity(number))
+            {
+                value = Convert.ToInt64(Math.Round(number, MidpointRounding.AwayFromZero));
+                return true;
+            }
+
+            return false;
+        }
+
+        if (element.ValueKind == JsonValueKind.String)
+        {
+            var text = element.GetString();
+            if (string.IsNullOrWhiteSpace(text))
+                return false;
+
+            if (long.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out value))
+                return true;
+
+            if (double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var number) &&
+                !double.IsNaN(number) && !double.IsInfinity(number))
+            {
+                value = Convert.ToInt64(Math.Round(number, MidpointRounding.AwayFromZero));
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public async Task<GatewaySnapshot> GetGatewaySnapshotAsync()

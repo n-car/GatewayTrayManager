@@ -1,7 +1,10 @@
 using System;
 using System.Drawing;
 using System.IO;
+using System.Linq;
+using System.Net;
 using System.Net.Http;
+using System.Globalization;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -26,6 +29,11 @@ public sealed class ConfigForm : Form
     private readonly TextBox _txtPassword;
     private readonly NumericUpDown _numPollInterval;
     private readonly NumericUpDown _numTimeout;
+    private readonly NumericUpDown _numHeapWarning;
+    private readonly NumericUpDown _numHeapCritical;
+    private readonly NumericUpDown _numHeapRecovery;
+    private readonly NumericUpDown _numHeapConsecutive;
+    private readonly NumericUpDown _numHeapReminder;
     private readonly CheckBox _chkAutoStart;
     private readonly CheckBox _chkUseSessionAuth;
     private readonly RichTextBox _txtTestResult;
@@ -51,14 +59,14 @@ public sealed class ConfigForm : Form
         MaximizeBox = false;
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
-        Size = new Size(500, 570);
+        Size = new Size(540, 760);
         Padding = new Padding(10);
 
         var mainPanel = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             ColumnCount = 2,
-            RowCount = 11,
+            RowCount = 16,
             Padding = new Padding(10)
         };
         mainPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 120));
@@ -131,6 +139,57 @@ public sealed class ConfigForm : Form
         mainPanel.Controls.Add(_chkUseSessionAuth, 0, 7);
         mainPanel.SetColumnSpan(_chkUseSessionAuth, 2);
 
+        // Heap alert thresholds
+        mainPanel.Controls.Add(new Label { Text = Strings.ConfigHeapWarning, Anchor = AnchorStyles.Left, AutoSize = true }, 0, 8);
+        _numHeapWarning = new NumericUpDown
+        {
+            Dock = DockStyle.Fill,
+            Minimum = 1,
+            Maximum = 99,
+            Value = Math.Clamp(currentConfig.HeapWarningPercent, 1, 99)
+        };
+        mainPanel.Controls.Add(_numHeapWarning, 1, 8);
+
+        mainPanel.Controls.Add(new Label { Text = Strings.ConfigHeapCritical, Anchor = AnchorStyles.Left, AutoSize = true }, 0, 9);
+        _numHeapCritical = new NumericUpDown
+        {
+            Dock = DockStyle.Fill,
+            Minimum = 1,
+            Maximum = 99,
+            Value = Math.Clamp(currentConfig.HeapCriticalPercent, 1, 99)
+        };
+        mainPanel.Controls.Add(_numHeapCritical, 1, 9);
+
+        mainPanel.Controls.Add(new Label { Text = Strings.ConfigHeapRecovery, Anchor = AnchorStyles.Left, AutoSize = true }, 0, 10);
+        _numHeapRecovery = new NumericUpDown
+        {
+            Dock = DockStyle.Fill,
+            Minimum = 1,
+            Maximum = 99,
+            Value = Math.Clamp(currentConfig.HeapRecoveryPercent, 1, 99)
+        };
+        mainPanel.Controls.Add(_numHeapRecovery, 1, 10);
+
+        mainPanel.Controls.Add(new Label { Text = Strings.ConfigHeapConsecutive, Anchor = AnchorStyles.Left, AutoSize = true }, 0, 11);
+        _numHeapConsecutive = new NumericUpDown
+        {
+            Dock = DockStyle.Fill,
+            Minimum = 1,
+            Maximum = 20,
+            Value = Math.Clamp(currentConfig.HeapConsecutiveSamples, 1, 20)
+        };
+        mainPanel.Controls.Add(_numHeapConsecutive, 1, 11);
+
+        mainPanel.Controls.Add(new Label { Text = Strings.ConfigHeapReminder, Anchor = AnchorStyles.Left, AutoSize = true }, 0, 12);
+        _numHeapReminder = new NumericUpDown
+        {
+            Dock = DockStyle.Fill,
+            Minimum = 1,
+            Maximum = 120,
+            Value = Math.Clamp(currentConfig.HeapCriticalReminderMinutes, 1, 120)
+        };
+        mainPanel.Controls.Add(_numHeapReminder, 1, 12);
+
         // Test Button
         _btnTest = new Button
         {
@@ -141,7 +200,7 @@ public sealed class ConfigForm : Form
         _btnTest.Click += OnTestButtonClick;
         var testPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 5, 0, 5) };
         testPanel.Controls.Add(_btnTest);
-        mainPanel.Controls.Add(testPanel, 0, 8);
+        mainPanel.Controls.Add(testPanel, 0, 13);
         mainPanel.SetColumnSpan(testPanel, 2);
 
         // Test Result
@@ -153,7 +212,7 @@ public sealed class ConfigForm : Form
             BackColor = Color.FromArgb(30, 30, 30),
             ForeColor = Color.LightGreen
         };
-        mainPanel.Controls.Add(_txtTestResult, 0, 9);
+        mainPanel.Controls.Add(_txtTestResult, 0, 14);
         mainPanel.SetColumnSpan(_txtTestResult, 2);
         mainPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 30)); // Row 0 - Service Name
         mainPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 30)); // Row 1 - Gateway URL
@@ -163,9 +222,14 @@ public sealed class ConfigForm : Form
         mainPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 30)); // Row 5 - Password
         mainPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 30)); // Row 6 - Auto-start checkbox
         mainPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 30)); // Row 7 - Session Auth checkbox
-        mainPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 45)); // Row 8 - Test button
-        mainPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); // Row 9 - Test result
-        mainPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 40)); // Row 10 - Buttons
+        mainPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 30)); // Row 8 - Heap warning
+        mainPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 30)); // Row 9 - Heap critical
+        mainPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 30)); // Row 10 - Heap recovery
+        mainPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 30)); // Row 11 - Heap consecutive
+        mainPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 30)); // Row 12 - Heap reminder
+        mainPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 45)); // Row 13 - Test button
+        mainPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); // Row 14 - Test result
+        mainPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 40)); // Row 15 - Buttons
 
         // Buttons Panel
         var buttonsPanel = new FlowLayoutPanel
@@ -184,7 +248,7 @@ public sealed class ConfigForm : Form
         buttonsPanel.Controls.Add(_btnCancel);
         buttonsPanel.Controls.Add(_btnSave);
 
-        mainPanel.Controls.Add(buttonsPanel, 0, 10);
+        mainPanel.Controls.Add(buttonsPanel, 0, 15);
         mainPanel.SetColumnSpan(buttonsPanel, 2);
 
         Controls.Add(mainPanel);
@@ -198,9 +262,14 @@ public sealed class ConfigForm : Form
         _txtPassword.TabIndex = 5;
         _chkAutoStart.TabIndex = 6;
         _chkUseSessionAuth.TabIndex = 7;
-        _btnTest.TabIndex = 8;
-        _btnSave.TabIndex = 9;
-        _btnCancel.TabIndex = 10;
+        _numHeapWarning.TabIndex = 8;
+        _numHeapCritical.TabIndex = 9;
+        _numHeapRecovery.TabIndex = 10;
+        _numHeapConsecutive.TabIndex = 11;
+        _numHeapReminder.TabIndex = 12;
+        _btnTest.TabIndex = 13;
+        _btnSave.TabIndex = 14;
+        _btnCancel.TabIndex = 15;
     }
 
     private static bool IsAutoStartEnabled()
@@ -383,91 +452,262 @@ public sealed class ConfigForm : Form
 
     private async Task<(bool ok, string info)> TestSessionAuthAsync(string baseUrl, string username, string password)
     {
+        var debugInfo = new System.Text.StringBuilder();
+
         try
         {
-            // Create a new HttpClient with CookieContainer for session auth
+            // Step 1: Test the OIDC flow manually with debug info
+            var baseUri = new Uri(baseUrl.TrimEnd('/') + "/");
+            var loginUrl = new Uri(baseUri, "data/app/login");
+
             using var handler = new HttpClientHandler
             {
+                AllowAutoRedirect = false,
                 CookieContainer = new System.Net.CookieContainer(),
                 UseCookies = true
             };
-            using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(10) };
+            using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(15) };
 
-            var baseUri = new Uri(baseUrl.TrimEnd('/') + "/");
+            // GET /data/app/login
+            debugInfo.AppendLine($"GET {loginUrl}");
+            var response = await client.GetAsync(loginUrl);
+            debugInfo.AppendLine($"  → {(int)response.StatusCode} {response.ReasonPhrase}");
 
-            // Step 1: Try multiple login endpoints
-            string[] loginEndpoints = { "data/app/login", "web/login", "data/login", "login" };
-            bool loginSuccess = false;
-            string loginError = "";
-
-            foreach (var endpoint in loginEndpoints)
+            if (response.StatusCode != System.Net.HttpStatusCode.Found && 
+                response.StatusCode != System.Net.HttpStatusCode.Redirect)
             {
-                try
+                debugInfo.AppendLine($"  Non è un redirect OIDC");
+                return (false, debugInfo.ToString());
+            }
+
+            var redirectUrl = response.Headers.Location;
+            if (redirectUrl == null)
+            {
+                debugInfo.AppendLine($"  Location header mancante");
+                return (false, debugInfo.ToString());
+            }
+
+            if (!redirectUrl.IsAbsoluteUri)
+            {
+                redirectUrl = new Uri(baseUri, redirectUrl);
+            }
+
+            debugInfo.AppendLine($"  Location: {redirectUrl}");
+
+            // Parse IdP path
+            var idpMatch = System.Text.RegularExpressions.Regex.Match(
+                redirectUrl.AbsolutePath, 
+                @"/idp/([^/]+)/oidc/auth");
+
+            if (!idpMatch.Success)
+            {
+                debugInfo.AppendLine($"  Pattern /idp/<name>/oidc/auth non trovato nel path: {redirectUrl.AbsolutePath}");
+                return (false, debugInfo.ToString());
+            }
+
+            var idpName = idpMatch.Groups[1].Value;
+            var authnBasePath = $"/idp/{idpName}/authn";
+            debugInfo.AppendLine($"  IdP: {idpName}");
+
+            // Token can be on the first redirect or on a second redirect to /authn/login.
+            var token = ExtractTokenFromUri(redirectUrl);
+            Uri? authnLoginUrl = null;
+
+            if (string.IsNullOrEmpty(token))
+            {
+                debugInfo.AppendLine($"  Token non trovato nel primo redirect, provo il secondo redirect...");
+                debugInfo.AppendLine($"\nGET {redirectUrl}");
+
+                var authnRedirectResp = await client.GetAsync(redirectUrl);
+                debugInfo.AppendLine($"  → {(int)authnRedirectResp.StatusCode} {authnRedirectResp.ReasonPhrase}");
+
+                if (authnRedirectResp.StatusCode != System.Net.HttpStatusCode.Found &&
+                    authnRedirectResp.StatusCode != System.Net.HttpStatusCode.Redirect)
                 {
-                    var loginUrl = new Uri(baseUri, endpoint);
-                    var loginContent = new FormUrlEncodedContent(new[]
-                    {
-                        new KeyValuePair<string, string>("username", username),
-                        new KeyValuePair<string, string>("password", password)
-                    });
-
-                    using var loginResp = await client.PostAsync(loginUrl, loginContent);
-
-                    if (loginResp.IsSuccessStatusCode || 
-                        loginResp.StatusCode == System.Net.HttpStatusCode.Found ||
-                        loginResp.StatusCode == System.Net.HttpStatusCode.SeeOther)
-                    {
-                        loginSuccess = true;
-                        break;
-                    }
-
-                    // 401/403 means credentials wrong
-                    if (loginResp.StatusCode == System.Net.HttpStatusCode.Unauthorized ||
-                        loginResp.StatusCode == System.Net.HttpStatusCode.Forbidden)
-                    {
-                        loginError = $"{(int)loginResp.StatusCode} {loginResp.ReasonPhrase}";
-                        break;
-                    }
-
-                    // 404 = endpoint doesn't exist, try next
-                    loginError = $"{endpoint}: {(int)loginResp.StatusCode}";
+                    return (false, debugInfo.ToString());
                 }
-                catch (Exception ex)
+
+                authnLoginUrl = authnRedirectResp.Headers.Location;
+                if (authnLoginUrl == null)
                 {
-                    loginError = ex.Message;
+                    debugInfo.AppendLine($"  Location header mancante nel secondo redirect");
+                    return (false, debugInfo.ToString());
+                }
+
+                if (!authnLoginUrl.IsAbsoluteUri)
+                {
+                    authnLoginUrl = new Uri(baseUri, authnLoginUrl);
+                }
+
+                debugInfo.AppendLine($"  Location 2: {authnLoginUrl}");
+
+                var authnMatch = System.Text.RegularExpressions.Regex.Match(
+                    authnLoginUrl.AbsolutePath,
+                    @"/idp/([^/]+)/authn/login");
+
+                if (authnMatch.Success)
+                {
+                    idpName = authnMatch.Groups[1].Value;
+                    authnBasePath = $"/idp/{idpName}/authn";
+                    debugInfo.AppendLine($"  IdP aggiornato: {idpName}");
+                }
+
+                token = ExtractTokenFromUri(authnLoginUrl);
+                if (string.IsNullOrEmpty(token))
+                {
+                    debugInfo.AppendLine($"  Token non trovato neanche nel secondo redirect");
+                    return (false, debugInfo.ToString());
                 }
             }
 
-            if (!loginSuccess)
+            debugInfo.AppendLine($"  Token: {token[..Math.Min(20, token.Length)]}...");
+            var currentToken = token;
+
+            // Load authn/login page to initialize challenge state (browser-like flow).
+            if (authnLoginUrl != null)
             {
-                return (false, $"{Strings.TestLoginFailed} {loginError}");
+                debugInfo.AppendLine($"\nGET {authnLoginUrl}");
+                var authnPageResp = await client.GetAsync(authnLoginUrl);
+                debugInfo.AppendLine($"  → {(int)authnPageResp.StatusCode} {authnPageResp.ReasonPhrase}");
             }
 
-            // Step 2: Get performance metrics
+            // POST /idp/<name>/authn/next-challenge
+            var nextChallengeUrl = new Uri(baseUri, $"{authnBasePath}/next-challenge");
+            debugInfo.AppendLine($"\nPOST {nextChallengeUrl}");
+
+            var challengePayload = JsonSerializer.Serialize(new { token = currentToken });
+            var challengeContent = new StringContent(challengePayload, System.Text.Encoding.UTF8, "application/json");
+            var challengeResp = await client.PostAsync(nextChallengeUrl, challengeContent);
+
+            debugInfo.AppendLine($"  → {(int)challengeResp.StatusCode} {challengeResp.ReasonPhrase}");
+            var challengeBody = await challengeResp.Content.ReadAsStringAsync();
+            debugInfo.AppendLine($"  Body: {TruncateResponse(challengeBody, 100)}");
+
+            if (!challengeResp.IsSuccessStatusCode)
+            {
+                return (false, debugInfo.ToString());
+            }
+
+            using (var challengeDoc = JsonDocument.Parse(challengeBody))
+            {
+                currentToken = UpdateTokenIfPresent(currentToken, challengeDoc.RootElement);
+            }
+
+            // POST /idp/<name>/authn/submit-challenge/basic
+            var submitUrl = new Uri(baseUri, $"{authnBasePath}/submit-challenge/basic");
+            debugInfo.AppendLine($"\nPOST {submitUrl}");
+
+            var submitPayload = JsonSerializer.Serialize(new
+            {
+                token = currentToken,
+                rememberMe = false,
+                challenge = new
+                {
+                    username,
+                    password
+                }
+            });
+            var submitContent = new StringContent(submitPayload, System.Text.Encoding.UTF8, "application/json");
+            var submitResp = await client.PostAsync(submitUrl, submitContent);
+
+            debugInfo.AppendLine($"  → {(int)submitResp.StatusCode} {submitResp.ReasonPhrase}");
+            var submitBody = await submitResp.Content.ReadAsStringAsync();
+            debugInfo.AppendLine($"  Body: {TruncateResponse(submitBody, 100)}");
+
+            if (!submitResp.IsSuccessStatusCode)
+            {
+                return (false, debugInfo.ToString());
+            }
+
+            // Check success
+            using var submitDoc = JsonDocument.Parse(submitBody);
+            if (!submitDoc.RootElement.TryGetProperty("success", out var successProp) || !successProp.GetBoolean())
+            {
+                debugInfo.AppendLine($"  success != true");
+                return (false, debugInfo.ToString());
+            }
+            currentToken = UpdateTokenIfPresent(currentToken, submitDoc.RootElement);
+
+            debugInfo.AppendLine($"  ✓ Login success");
+
+            // Final next-challenge
+            var finalChallengeResp = await client.PostAsync(nextChallengeUrl, 
+                new StringContent(JsonSerializer.Serialize(new { token = currentToken }), System.Text.Encoding.UTF8, "application/json"));
+            var finalBody = await finalChallengeResp.Content.ReadAsStringAsync();
+            debugInfo.AppendLine($"\nFinal challenge: {TruncateResponse(finalBody, 100)}");
+
+            using var finalDoc = JsonDocument.Parse(finalBody);
+            if (!finalDoc.RootElement.TryGetProperty("complete", out var completeProp) || !completeProp.GetBoolean())
+            {
+                debugInfo.AppendLine($"  complete != true (MFA richiesto?)");
+                return (false, debugInfo.ToString());
+            }
+
+            currentToken = UpdateTokenIfPresent(currentToken, finalDoc.RootElement);
+
+            // Follow final redirect
+            var finalAuthUrl = new Uri(baseUri, $"/idp/{idpName}/oidc/auth?token={Uri.EscapeDataString(currentToken)}");
+            using var finalHandler = new HttpClientHandler
+            {
+                AllowAutoRedirect = true,
+                CookieContainer = handler.CookieContainer,
+                UseCookies = true
+            };
+            using var finalClient = new HttpClient(finalHandler) { Timeout = TimeSpan.FromSeconds(15) };
+
+            var finalAuthResp = await finalClient.GetAsync(finalAuthUrl);
+            debugInfo.AppendLine($"\nGET {finalAuthUrl}");
+            debugInfo.AppendLine($"  → {(int)finalAuthResp.StatusCode} {finalAuthResp.ReasonPhrase}");
+
+            // Now try to get performance metrics with the session
             var perfUrl = new Uri(baseUri, "data/api/v1/systemPerformance/currentGauges");
-            using var perfResp = await client.GetAsync(perfUrl);
 
-            // If session auth didn't work, try Basic Auth as fallback
-            if (!perfResp.IsSuccessStatusCode && !loginSuccess)
+            // Copy cookies to a new request
+            var cookies = handler.CookieContainer.GetCookies(baseUri);
+            using var perfClient = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+            var cookieHeader = string.Join("; ", cookies.Cast<System.Net.Cookie>().Select(c => $"{c.Name}={c.Value}"));
+            if (!string.IsNullOrEmpty(cookieHeader))
             {
-                return await TestBasicAuthAsync(baseUrl, username, password);
+                perfClient.DefaultRequestHeaders.Add("Cookie", cookieHeader);
             }
 
-            if (!perfResp.IsSuccessStatusCode)
+            var perfResp = await perfClient.GetAsync(perfUrl);
+            debugInfo.AppendLine($"\nGET {perfUrl}");
+            debugInfo.AppendLine($"  → {(int)perfResp.StatusCode}");
+
+            if (perfResp.IsSuccessStatusCode)
             {
-                // Try Basic Auth as fallback
-                return await TestBasicAuthAsync(baseUrl, username, password);
+                var perfJson = await perfResp.Content.ReadAsStringAsync();
+                return ParsePerformanceResponse(perfJson, " (OIDC)");
             }
 
-            var json = await perfResp.Content.ReadAsStringAsync();
-
-            // Parse the response
-            return ParsePerformanceResponse(json);
+            return (false, debugInfo.ToString());
         }
         catch (Exception ex)
         {
-            return (false, ex.Message);
+            debugInfo.AppendLine($"\nException: {ex.Message}");
+            return (false, debugInfo.ToString());
         }
+    }
+
+    private static string? ExtractTokenFromUri(Uri uri)
+    {
+        var queryParams = System.Web.HttpUtility.ParseQueryString(uri.Query);
+        return queryParams["token"];
+    }
+
+    private static string UpdateTokenIfPresent(string currentToken, JsonElement response)
+    {
+        if (response.TryGetProperty("token", out var tokenProp))
+        {
+            var token = tokenProp.GetString();
+            if (!string.IsNullOrWhiteSpace(token))
+            {
+                return token;
+            }
+        }
+
+        return currentToken;
     }
 
     private async Task<(bool ok, string info)> TestBasicAuthAsync(string baseUrl, string username, string password)
@@ -517,8 +757,8 @@ public sealed class ConfigForm : Form
             var root = doc.RootElement;
 
             var cpu = root.TryGetProperty("cpu", out var cpuEl) ? cpuEl.GetDouble() : 0;
-            var heapMemory = root.TryGetProperty("heapMemory", out var heapEl) ? heapEl.GetInt64() : 0;
-            var maxMemory = root.TryGetProperty("maxMemory", out var maxEl) ? maxEl.GetInt64() : 0;
+            var heapMemory = TryReadLong(root, "heapMemory");
+            var maxMemory = TryReadLong(root, "maxMemory");
 
             var heapMB = heapMemory / 1024 / 1024;
             var maxMB = maxMemory / 1024 / 1024;
@@ -530,6 +770,41 @@ public sealed class ConfigForm : Form
         {
             return (true, $"{Strings.TestRawResponse} {TruncateResponse(json, 100)}{suffix}");
         }
+    }
+
+    private static long TryReadLong(JsonElement root, string propertyName)
+    {
+        if (!root.TryGetProperty(propertyName, out var element))
+            return 0;
+
+        if (element.ValueKind == JsonValueKind.Number)
+        {
+            if (element.TryGetInt64(out var number64))
+                return number64;
+
+            if (element.TryGetDouble(out var numberDouble) && !double.IsNaN(numberDouble) && !double.IsInfinity(numberDouble))
+                return Convert.ToInt64(Math.Round(numberDouble, MidpointRounding.AwayFromZero));
+
+            return 0;
+        }
+
+        if (element.ValueKind == JsonValueKind.String)
+        {
+            var text = element.GetString();
+            if (string.IsNullOrWhiteSpace(text))
+                return 0;
+
+            if (long.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var number64))
+                return number64;
+
+            if (double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var numberDouble) &&
+                !double.IsNaN(numberDouble) && !double.IsInfinity(numberDouble))
+            {
+                return Convert.ToInt64(Math.Round(numberDouble, MidpointRounding.AwayFromZero));
+            }
+        }
+
+        return 0;
     }
 
     private static (bool ok, string info) TestServiceStatus(string serviceName)
@@ -593,6 +868,16 @@ public sealed class ConfigForm : Form
             return;
         }
 
+        var heapWarning = (int)_numHeapWarning.Value;
+        var heapCritical = (int)_numHeapCritical.Value;
+        var heapRecovery = (int)_numHeapRecovery.Value;
+
+        if (!(heapRecovery < heapWarning && heapWarning < heapCritical))
+        {
+            MessageBox.Show(Strings.ValidationHeapThresholds, Strings.ValidationError, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
         Config = new AppConfig
         {
             ServiceName = _txtServiceName.Text.Trim(),
@@ -601,7 +886,12 @@ public sealed class ConfigForm : Form
             HttpTimeoutSeconds = (int)_numTimeout.Value,
             Username = string.IsNullOrWhiteSpace(_txtUsername.Text) ? null : _txtUsername.Text.Trim(),
             Password = string.IsNullOrWhiteSpace(_txtPassword.Text) ? null : _txtPassword.Text,
-            UseSessionAuth = _chkUseSessionAuth.Checked
+            UseSessionAuth = _chkUseSessionAuth.Checked,
+            HeapWarningPercent = heapWarning,
+            HeapCriticalPercent = heapCritical,
+            HeapRecoveryPercent = heapRecovery,
+            HeapConsecutiveSamples = (int)_numHeapConsecutive.Value,
+            HeapCriticalReminderMinutes = (int)_numHeapReminder.Value
         };
 
         // Save to appsettings.json with encrypted password
@@ -618,7 +908,12 @@ public sealed class ConfigForm : Form
                     Config.HttpTimeoutSeconds,
                     Config.Username,
                     Password = PasswordProtection.Encrypt(Config.Password),  // Encrypt password for storage
-                    Config.UseSessionAuth
+                    Config.UseSessionAuth,
+                    Config.HeapWarningPercent,
+                    Config.HeapCriticalPercent,
+                    Config.HeapRecoveryPercent,
+                    Config.HeapConsecutiveSamples,
+                    Config.HeapCriticalReminderMinutes
                 }
             };
 
@@ -680,7 +975,12 @@ public sealed class ConfigForm : Form
                _originalConfig.HttpTimeoutSeconds != Config.HttpTimeoutSeconds ||
                _originalConfig.Username != Config.Username ||
                _originalConfig.Password != Config.Password ||
-               _originalConfig.UseSessionAuth != Config.UseSessionAuth;
+               _originalConfig.UseSessionAuth != Config.UseSessionAuth ||
+               _originalConfig.HeapWarningPercent != Config.HeapWarningPercent ||
+               _originalConfig.HeapCriticalPercent != Config.HeapCriticalPercent ||
+               _originalConfig.HeapRecoveryPercent != Config.HeapRecoveryPercent ||
+               _originalConfig.HeapConsecutiveSamples != Config.HeapConsecutiveSamples ||
+               _originalConfig.HeapCriticalReminderMinutes != Config.HeapCriticalReminderMinutes;
     }
 
     private static AppConfig CloneConfig(AppConfig config)
@@ -693,7 +993,12 @@ public sealed class ConfigForm : Form
             HttpTimeoutSeconds = config.HttpTimeoutSeconds,
             Username = config.Username,
             Password = config.Password,
-            UseSessionAuth = config.UseSessionAuth
+            UseSessionAuth = config.UseSessionAuth,
+            HeapWarningPercent = config.HeapWarningPercent,
+            HeapCriticalPercent = config.HeapCriticalPercent,
+            HeapRecoveryPercent = config.HeapRecoveryPercent,
+            HeapConsecutiveSamples = config.HeapConsecutiveSamples,
+            HeapCriticalReminderMinutes = config.HeapCriticalReminderMinutes
         };
     }
 

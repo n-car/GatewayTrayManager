@@ -32,6 +32,22 @@ public static class Strings
     public static string StatusUnavailable => IsItalian ? "(non disponibile)" : "(unavailable)";
     public static string StatusNotAvailable => "(n/a)";
     public static string GatewayStatusChanged => IsItalian ? "Stato gateway cambiato" : "Gateway status changed";
+    public static string HeapAlertWarningTitle => IsItalian ? "Heap in warning" : "Heap warning";
+    public static string HeapAlertWarningMessage => IsItalian
+        ? "Utilizzo heap {0:F1}% (soglia warning {1}%, critica {2}%)."
+        : "Heap usage {0:F1}% (warning {1}%, critical {2}%).";
+    public static string HeapAlertCriticalTitle => IsItalian ? "Heap critica" : "Heap critical";
+    public static string HeapAlertCriticalMessage => IsItalian
+        ? "Utilizzo heap {0:F1}% (>= soglia critica {1}%)."
+        : "Heap usage {0:F1}% (>= critical threshold {1}%).";
+    public static string HeapAlertRecoveredTitle => IsItalian ? "Heap rientrata" : "Heap recovered";
+    public static string HeapAlertRecoveredMessage => IsItalian
+        ? "Utilizzo heap rientrato a {0:F1}% (<= recovery {1}%)."
+        : "Heap usage recovered to {0:F1}% (<= recovery {1}%).";
+    public static string HeapAlertCriticalReminderTitle => IsItalian ? "Heap ancora critica" : "Heap still critical";
+    public static string HeapAlertCriticalReminderMessage => IsItalian
+        ? "Utilizzo heap ancora alto: {0:F1}%."
+        : "Heap usage remains high: {0:F1}%.";
 
     // === ConfigForm ===
     public static string ConfigTitle => IsItalian ? "Gateway Tray Manager - Configurazione" : "Gateway Tray Manager - Configuration";
@@ -47,6 +63,11 @@ public static class Strings
     public static string ConfigUseSessionAuthTooltip => IsItalian 
         ? "Abilita per leggere metriche CPU/memoria da /data/api/v1/systemPerformance/currentGauges (richiede credenziali)" 
         : "Enable to read CPU/memory metrics from /data/api/v1/systemPerformance/currentGauges (requires credentials)";
+    public static string ConfigHeapWarning => IsItalian ? "Heap Warning (%):" : "Heap Warning (%):";
+    public static string ConfigHeapCritical => IsItalian ? "Heap Critical (%):" : "Heap Critical (%):";
+    public static string ConfigHeapRecovery => IsItalian ? "Heap Recovery (%):" : "Heap Recovery (%):";
+    public static string ConfigHeapConsecutive => IsItalian ? "Campioni consecutivi:" : "Consecutive samples:";
+    public static string ConfigHeapReminder => IsItalian ? "Reminder critico (min):" : "Critical reminder (min):";
     public static string ConfigTestConnection => IsItalian ? "🔍 Test Connessione" : "🔍 Test Connection";
     public static string ConfigSave => IsItalian ? "💾 Salva" : "💾 Save";
     public static string ConfigCancel => IsItalian ? "Annulla" : "Cancel";
@@ -59,6 +80,9 @@ public static class Strings
     public static string ValidationSessionAuthCredentials => IsItalian 
         ? "L'autenticazione sessione richiede sia Username che Password." 
         : "Session authentication requires both Username and Password.";
+    public static string ValidationHeapThresholds => IsItalian
+        ? "Le soglie heap devono rispettare: Recovery < Warning < Critical."
+        : "Heap thresholds must satisfy: Recovery < Warning < Critical.";
 
     // === Save/Restart ===
     public static string SaveSuccess => IsItalian ? "Configurazione salvata con successo!" : "Configuration saved successfully!";

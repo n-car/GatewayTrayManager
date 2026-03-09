@@ -73,6 +73,11 @@ Right-click tray icon → **Configuration...**
 | HTTP Timeout | API timeout (seconds) | `2` |
 | Username | (Optional) Basic auth username | - |
 | Password | (Optional) Basic auth password | - |
+| Heap Warning | Warning threshold for heap usage (%) | `75` |
+| Heap Critical | Critical threshold for heap usage (%) | `85` |
+| Heap Recovery | Recovery threshold for heap usage (%) | `70` |
+| Consecutive Samples | Samples required before state change | `3` |
+| Critical Reminder | Minutes between critical reminders | `10` |
 | Auto-start | Start with Windows | Off |
 
 Configuration is saved to `appsettings.json`:
@@ -85,7 +90,13 @@ Configuration is saved to `appsettings.json`:
     "PollIntervalMs": 3000,
     "HttpTimeoutSeconds": 2,
     "Username": null,
-    "Password": null
+    "Password": null,
+    "UseSessionAuth": false,
+    "HeapWarningPercent": 75,
+    "HeapCriticalPercent": 85,
+    "HeapRecoveryPercent": 70,
+    "HeapConsecutiveSamples": 3,
+    "HeapCriticalReminderMinutes": 10
   }
 }
 ```

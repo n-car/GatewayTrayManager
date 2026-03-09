@@ -14,6 +14,13 @@ namespace GatewayTrayManager;
 
 public sealed class TrayAppContext : ApplicationContext
 {
+    private enum HeapAlertState
+    {
+        Normal,
+        Warning,
+        Critical
+    }
+
     private readonly NotifyIcon _tray;
     private readonly ToolStripMenuItem _miService;
     private readonly ToolStripMenuItem _miGateway;
@@ -24,6 +31,7 @@ public sealed class TrayAppContext : ApplicationContext
 
     private readonly Timer _timer;
     private readonly GatewayMonitor _monitor;
+    private readonly AppConfig _config;
     private readonly string _serviceName;
     private readonly string _gatewayUrl;
     private readonly SynchronizationContext? _syncContext;
@@ -32,11 +40,17 @@ public sealed class TrayAppContext : ApplicationContext
     private ServiceControllerStatus? _lastServiceStatus;
     private bool _isDisposed;
     private bool _isRefreshing;
+    private bool _heapAlertInitialized;
+    private HeapAlertState _heapAlertState = HeapAlertState.Normal;
+    private HeapAlertState? _pendingHeapState;
+    private int _pendingHeapStateSamples;
+    private DateTime _nextCriticalReminderUtc = DateTime.MinValue;
 
     public TrayAppContext()
     {
         _syncContext = SynchronizationContext.Current;
         var cfg = LoadConfig();
+        _config = cfg;
         _serviceName = cfg.ServiceName;
         _gatewayUrl = cfg.GatewayBaseUrl;
 
@@ -135,6 +149,26 @@ public sealed class TrayAppContext : ApplicationContext
         if (string.IsNullOrWhiteSpace(appCfg.GatewayBaseUrl)) appCfg.GatewayBaseUrl = "http://localhost:8088";
         if (appCfg.PollIntervalMs <= 0) appCfg.PollIntervalMs = 3000;
         if (appCfg.HttpTimeoutSeconds <= 0) appCfg.HttpTimeoutSeconds = 2;
+        appCfg.HeapWarningPercent = Math.Clamp(appCfg.HeapWarningPercent, 1, 99);
+        appCfg.HeapCriticalPercent = Math.Clamp(appCfg.HeapCriticalPercent, 1, 99);
+        appCfg.HeapRecoveryPercent = Math.Clamp(appCfg.HeapRecoveryPercent, 1, 99);
+        appCfg.HeapConsecutiveSamples = Math.Clamp(appCfg.HeapConsecutiveSamples, 1, 20);
+        appCfg.HeapCriticalReminderMinutes = Math.Clamp(appCfg.HeapCriticalReminderMinutes, 1, 120);
+
+        // Ensure coherent threshold ordering: Recovery < Warning < Critical.
+        if (appCfg.HeapWarningPercent >= appCfg.HeapCriticalPercent)
+        {
+            appCfg.HeapCriticalPercent = Math.Min(99, appCfg.HeapWarningPercent + 10);
+            if (appCfg.HeapWarningPercent >= appCfg.HeapCriticalPercent)
+            {
+                appCfg.HeapWarningPercent = Math.Max(1, appCfg.HeapCriticalPercent - 1);
+            }
+        }
+
+        if (appCfg.HeapRecoveryPercent >= appCfg.HeapWarningPercent)
+        {
+            appCfg.HeapRecoveryPercent = Math.Max(1, appCfg.HeapWarningPercent - 5);
+        }
 
         // Decrypt password if encrypted
         appCfg.Password = PasswordProtection.Decrypt(appCfg.Password);
@@ -293,12 +327,20 @@ public sealed class TrayAppContext : ApplicationContext
             if (snapshot.HasPerformanceInfo)
             {
                 var perf = snapshot.PerformanceInfo!;
-                _miPerformance.Text = $"📊 CPU: {perf.CpuUsagePercent:F1}% | Heap: {perf.MemoryUsagePercent}% ({perf.HeapMemoryMB}/{perf.MaxMemoryMB})";
+                EvaluateHeapAlertState(perf.MemoryUsagePercent);
+                var alertTag = _heapAlertState switch
+                {
+                    HeapAlertState.Critical => " | !! CRITICAL",
+                    HeapAlertState.Warning => " | ! WARNING",
+                    _ => string.Empty
+                };
+                _miPerformance.Text = $"📊 CPU: {perf.CpuUsagePercent:F1}% | Heap: {perf.MemoryUsagePercent}% ({perf.HeapMemoryMB}/{perf.MaxMemoryMB}){alertTag}";
                 _miPerformance.Visible = true;
             }
             else if (_miPerformance.Visible)
             {
                 _miPerformance.Text = $"{Strings.MenuPerformance} {Strings.StatusUnavailable}";
+                ResetHeapAlertEvaluation();
             }
 
             _miStart.Enabled = snapshot.CanStart;
@@ -349,6 +391,146 @@ public sealed class TrayAppContext : ApplicationContext
         {
             // Errors handled in RefreshAsync
         }
+    }
+
+    private void ResetHeapAlertEvaluation()
+    {
+        _heapAlertInitialized = false;
+        _heapAlertState = HeapAlertState.Normal;
+        _pendingHeapState = null;
+        _pendingHeapStateSamples = 0;
+        _nextCriticalReminderUtc = DateTime.MinValue;
+    }
+
+    private void EvaluateHeapAlertState(double heapPercent)
+    {
+        if (double.IsNaN(heapPercent) || double.IsInfinity(heapPercent))
+            return;
+
+        if (!_heapAlertInitialized)
+        {
+            _heapAlertState = DetermineInitialHeapState(heapPercent);
+            _heapAlertInitialized = true;
+
+            if (_heapAlertState == HeapAlertState.Critical)
+            {
+                _nextCriticalReminderUtc = DateTime.UtcNow.AddMinutes(Math.Max(1, _config.HeapCriticalReminderMinutes));
+            }
+            return;
+        }
+
+        var desiredState = DetermineNextHeapState(heapPercent);
+        if (desiredState == _heapAlertState)
+        {
+            _pendingHeapState = null;
+            _pendingHeapStateSamples = 0;
+            MaybeSendCriticalReminder(heapPercent);
+            return;
+        }
+
+        if (_pendingHeapState != desiredState)
+        {
+            _pendingHeapState = desiredState;
+            _pendingHeapStateSamples = 1;
+            return;
+        }
+
+        _pendingHeapStateSamples++;
+        if (_pendingHeapStateSamples < _config.HeapConsecutiveSamples)
+            return;
+
+        var previousState = _heapAlertState;
+        _heapAlertState = desiredState;
+        _pendingHeapState = null;
+        _pendingHeapStateSamples = 0;
+        OnHeapAlertStateChanged(previousState, _heapAlertState, heapPercent);
+    }
+
+    private HeapAlertState DetermineInitialHeapState(double heapPercent)
+    {
+        if (heapPercent >= _config.HeapCriticalPercent)
+            return HeapAlertState.Critical;
+        if (heapPercent >= _config.HeapWarningPercent)
+            return HeapAlertState.Warning;
+        return HeapAlertState.Normal;
+    }
+
+    private HeapAlertState DetermineNextHeapState(double heapPercent)
+    {
+        return _heapAlertState switch
+        {
+            HeapAlertState.Normal => heapPercent >= _config.HeapCriticalPercent
+                ? HeapAlertState.Critical
+                : heapPercent >= _config.HeapWarningPercent
+                    ? HeapAlertState.Warning
+                    : HeapAlertState.Normal,
+            HeapAlertState.Warning => heapPercent >= _config.HeapCriticalPercent
+                ? HeapAlertState.Critical
+                : heapPercent <= _config.HeapRecoveryPercent
+                    ? HeapAlertState.Normal
+                    : HeapAlertState.Warning,
+            HeapAlertState.Critical => heapPercent <= _config.HeapRecoveryPercent
+                ? HeapAlertState.Normal
+                : heapPercent < _config.HeapCriticalPercent
+                    ? HeapAlertState.Warning
+                    : HeapAlertState.Critical,
+            _ => HeapAlertState.Normal
+        };
+    }
+
+    private void OnHeapAlertStateChanged(HeapAlertState previousState, HeapAlertState newState, double heapPercent)
+    {
+        if (newState == HeapAlertState.Critical)
+        {
+            _nextCriticalReminderUtc = DateTime.UtcNow.AddMinutes(Math.Max(1, _config.HeapCriticalReminderMinutes));
+        }
+        else
+        {
+            _nextCriticalReminderUtc = DateTime.MinValue;
+        }
+
+        switch (newState)
+        {
+            case HeapAlertState.Warning:
+                _tray.ShowBalloonTip(
+                    5000,
+                    Strings.HeapAlertWarningTitle,
+                    string.Format(Strings.HeapAlertWarningMessage, heapPercent, _config.HeapWarningPercent, _config.HeapCriticalPercent),
+                    ToolTipIcon.Warning);
+                break;
+            case HeapAlertState.Critical:
+                _tray.ShowBalloonTip(
+                    7000,
+                    Strings.HeapAlertCriticalTitle,
+                    string.Format(Strings.HeapAlertCriticalMessage, heapPercent, _config.HeapCriticalPercent),
+                    ToolTipIcon.Error);
+                break;
+            case HeapAlertState.Normal when previousState != HeapAlertState.Normal:
+                _tray.ShowBalloonTip(
+                    4000,
+                    Strings.HeapAlertRecoveredTitle,
+                    string.Format(Strings.HeapAlertRecoveredMessage, heapPercent, _config.HeapRecoveryPercent),
+                    ToolTipIcon.Info);
+                break;
+        }
+    }
+
+    private void MaybeSendCriticalReminder(double heapPercent)
+    {
+        if (_heapAlertState != HeapAlertState.Critical)
+            return;
+
+        var now = DateTime.UtcNow;
+        if (now < _nextCriticalReminderUtc)
+            return;
+
+        _tray.ShowBalloonTip(
+            6000,
+            Strings.HeapAlertCriticalReminderTitle,
+            string.Format(Strings.HeapAlertCriticalReminderMessage, heapPercent),
+            ToolTipIcon.Warning);
+
+        _nextCriticalReminderUtc = now.AddMinutes(Math.Max(1, _config.HeapCriticalReminderMinutes));
     }
 
     private void UpdateUIOnError()
@@ -423,6 +605,11 @@ public sealed class AppConfig
     /// protected endpoints like /data/api/v1/gateway-info for detailed gateway metrics.
     /// </summary>
     public bool UseSessionAuth { get; set; } = false;
+    public int HeapWarningPercent { get; set; } = 75;
+    public int HeapCriticalPercent { get; set; } = 85;
+    public int HeapRecoveryPercent { get; set; } = 70;
+    public int HeapConsecutiveSamples { get; set; } = 3;
+    public int HeapCriticalReminderMinutes { get; set; } = 10;
 
     public bool HasCredentials => !string.IsNullOrEmpty(Username) && !string.IsNullOrEmpty(Password);
 }
