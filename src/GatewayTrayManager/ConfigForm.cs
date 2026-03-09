@@ -7,6 +7,8 @@ using System.Threading.Tasks;
 using System.Windows.Forms;
 using Microsoft.Win32;
 using ServiceManager;
+using GatewayTrayManager.Localization;
+using GatewayTrayManager.Security;
 
 namespace GatewayTrayManager;
 
@@ -15,6 +17,9 @@ public sealed class ConfigForm : Form
     private const string AppName = "Gateway Tray Manager";
     private const string StartupRegistryKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
 
+    // Use HKLM for auto-start (same as installer) - requires admin rights
+    private static readonly RegistryKey StartupRegistryRoot = Registry.LocalMachine;
+
     private readonly TextBox _txtServiceName;
     private readonly TextBox _txtGatewayUrl;
     private readonly TextBox _txtUsername;
@@ -22,51 +27,55 @@ public sealed class ConfigForm : Form
     private readonly NumericUpDown _numPollInterval;
     private readonly NumericUpDown _numTimeout;
     private readonly CheckBox _chkAutoStart;
+    private readonly CheckBox _chkUseSessionAuth;
     private readonly RichTextBox _txtTestResult;
     private readonly Button _btnTest;
     private readonly Button _btnSave;
     private readonly Button _btnCancel;
     private readonly HttpClient _http;
+    private readonly AppConfig _originalConfig;
 
     public AppConfig Config { get; private set; }
     public bool ConfigSaved { get; private set; }
+    public bool RestartRequested { get; private set; }
 
     public ConfigForm(AppConfig currentConfig)
     {
         Config = currentConfig;
+        _originalConfig = CloneConfig(currentConfig);
         _http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
 
-        Text = "Gateway Tray Manager - Configuration";
+        Text = Strings.ConfigTitle;
         Icon = TrayIconGenerator.CreateApplicationIcon();
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
-        Size = new Size(500, 540);
+        Size = new Size(500, 570);
         Padding = new Padding(10);
 
         var mainPanel = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             ColumnCount = 2,
-            RowCount = 10,
+            RowCount = 11,
             Padding = new Padding(10)
         };
         mainPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 120));
         mainPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
 
         // Service Name
-        mainPanel.Controls.Add(new Label { Text = "Service Name:", Anchor = AnchorStyles.Left, AutoSize = true }, 0, 0);
+        mainPanel.Controls.Add(new Label { Text = Strings.ConfigServiceName, Anchor = AnchorStyles.Left, AutoSize = true }, 0, 0);
         _txtServiceName = new TextBox { Dock = DockStyle.Fill, Text = currentConfig.ServiceName };
         mainPanel.Controls.Add(_txtServiceName, 1, 0);
 
         // Gateway URL
-        mainPanel.Controls.Add(new Label { Text = "Gateway URL:", Anchor = AnchorStyles.Left, AutoSize = true }, 0, 1);
+        mainPanel.Controls.Add(new Label { Text = Strings.ConfigGatewayUrl, Anchor = AnchorStyles.Left, AutoSize = true }, 0, 1);
         _txtGatewayUrl = new TextBox { Dock = DockStyle.Fill, Text = currentConfig.GatewayBaseUrl };
         mainPanel.Controls.Add(_txtGatewayUrl, 1, 1);
 
         // Poll Interval
-        mainPanel.Controls.Add(new Label { Text = "Poll Interval (ms):", Anchor = AnchorStyles.Left, AutoSize = true }, 0, 2);
+        mainPanel.Controls.Add(new Label { Text = Strings.ConfigPollInterval, Anchor = AnchorStyles.Left, AutoSize = true }, 0, 2);
         _numPollInterval = new NumericUpDown
         {
             Dock = DockStyle.Fill,
@@ -78,7 +87,7 @@ public sealed class ConfigForm : Form
         mainPanel.Controls.Add(_numPollInterval, 1, 2);
 
         // Timeout
-        mainPanel.Controls.Add(new Label { Text = "HTTP Timeout (s):", Anchor = AnchorStyles.Left, AutoSize = true }, 0, 3);
+        mainPanel.Controls.Add(new Label { Text = Strings.ConfigHttpTimeout, Anchor = AnchorStyles.Left, AutoSize = true }, 0, 3);
         _numTimeout = new NumericUpDown
         {
             Dock = DockStyle.Fill,
@@ -89,19 +98,19 @@ public sealed class ConfigForm : Form
         mainPanel.Controls.Add(_numTimeout, 1, 3);
 
         // Username (optional)
-        mainPanel.Controls.Add(new Label { Text = "Username:", Anchor = AnchorStyles.Left, AutoSize = true }, 0, 4);
-        _txtUsername = new TextBox { Dock = DockStyle.Fill, Text = currentConfig.Username ?? "", PlaceholderText = "(optional)" };
+        mainPanel.Controls.Add(new Label { Text = Strings.ConfigUsername, Anchor = AnchorStyles.Left, AutoSize = true }, 0, 4);
+        _txtUsername = new TextBox { Dock = DockStyle.Fill, Text = currentConfig.Username ?? "", PlaceholderText = Strings.ConfigOptional };
         mainPanel.Controls.Add(_txtUsername, 1, 4);
 
         // Password (optional)
-        mainPanel.Controls.Add(new Label { Text = "Password:", Anchor = AnchorStyles.Left, AutoSize = true }, 0, 5);
-        _txtPassword = new TextBox { Dock = DockStyle.Fill, Text = currentConfig.Password ?? "", PlaceholderText = "(optional)", UseSystemPasswordChar = true };
+        mainPanel.Controls.Add(new Label { Text = Strings.ConfigPassword, Anchor = AnchorStyles.Left, AutoSize = true }, 0, 5);
+        _txtPassword = new TextBox { Dock = DockStyle.Fill, Text = currentConfig.Password ?? "", PlaceholderText = Strings.ConfigOptional, UseSystemPasswordChar = true };
         mainPanel.Controls.Add(_txtPassword, 1, 5);
 
         // Auto-start checkbox
         _chkAutoStart = new CheckBox
         {
-            Text = "🚀 Start automatically with Windows",
+            Text = Strings.ConfigAutoStart,
             Dock = DockStyle.Fill,
             Checked = IsAutoStartEnabled(),
             AutoSize = true
@@ -109,17 +118,30 @@ public sealed class ConfigForm : Form
         mainPanel.Controls.Add(_chkAutoStart, 0, 6);
         mainPanel.SetColumnSpan(_chkAutoStart, 2);
 
+        // Use Session Auth checkbox
+        _chkUseSessionAuth = new CheckBox
+        {
+            Text = Strings.ConfigUseSessionAuth,
+            Dock = DockStyle.Fill,
+            Checked = currentConfig.UseSessionAuth,
+            AutoSize = true
+        };
+        var sessionAuthTooltip = new ToolTip();
+        sessionAuthTooltip.SetToolTip(_chkUseSessionAuth, Strings.ConfigUseSessionAuthTooltip);
+        mainPanel.Controls.Add(_chkUseSessionAuth, 0, 7);
+        mainPanel.SetColumnSpan(_chkUseSessionAuth, 2);
+
         // Test Button
         _btnTest = new Button
         {
-            Text = "🔍 Test Connection",
+            Text = Strings.ConfigTestConnection,
             Dock = DockStyle.Fill,
             Height = 35
         };
         _btnTest.Click += OnTestButtonClick;
         var testPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 5, 0, 5) };
         testPanel.Controls.Add(_btnTest);
-        mainPanel.Controls.Add(testPanel, 0, 7);
+        mainPanel.Controls.Add(testPanel, 0, 8);
         mainPanel.SetColumnSpan(testPanel, 2);
 
         // Test Result
@@ -131,7 +153,7 @@ public sealed class ConfigForm : Form
             BackColor = Color.FromArgb(30, 30, 30),
             ForeColor = Color.LightGreen
         };
-        mainPanel.Controls.Add(_txtTestResult, 0, 8);
+        mainPanel.Controls.Add(_txtTestResult, 0, 9);
         mainPanel.SetColumnSpan(_txtTestResult, 2);
         mainPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 30)); // Row 0 - Service Name
         mainPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 30)); // Row 1 - Gateway URL
@@ -140,9 +162,10 @@ public sealed class ConfigForm : Form
         mainPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 30)); // Row 4 - Username
         mainPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 30)); // Row 5 - Password
         mainPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 30)); // Row 6 - Auto-start checkbox
-        mainPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 45)); // Row 7 - Test button
-        mainPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); // Row 8 - Test result
-        mainPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 40)); // Row 9 - Buttons
+        mainPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 30)); // Row 7 - Session Auth checkbox
+        mainPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 45)); // Row 8 - Test button
+        mainPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); // Row 9 - Test result
+        mainPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 40)); // Row 10 - Buttons
 
         // Buttons Panel
         var buttonsPanel = new FlowLayoutPanel
@@ -152,16 +175,16 @@ public sealed class ConfigForm : Form
             Padding = new Padding(0, 5, 0, 0)
         };
 
-        _btnCancel = new Button { Text = "Cancel", Width = 80, Height = 30 };
+        _btnCancel = new Button { Text = Strings.ConfigCancel, Width = 80, Height = 30 };
         _btnCancel.Click += (_, _) => { ConfigSaved = false; Close(); };
 
-        _btnSave = new Button { Text = "💾 Save", Width = 80, Height = 30 };
+        _btnSave = new Button { Text = Strings.ConfigSave, Width = 80, Height = 30 };
         _btnSave.Click += (_, _) => SaveConfig();
 
         buttonsPanel.Controls.Add(_btnCancel);
         buttonsPanel.Controls.Add(_btnSave);
 
-        mainPanel.Controls.Add(buttonsPanel, 0, 9);
+        mainPanel.Controls.Add(buttonsPanel, 0, 10);
         mainPanel.SetColumnSpan(buttonsPanel, 2);
 
         Controls.Add(mainPanel);
@@ -174,16 +197,17 @@ public sealed class ConfigForm : Form
         _txtUsername.TabIndex = 4;
         _txtPassword.TabIndex = 5;
         _chkAutoStart.TabIndex = 6;
-        _btnTest.TabIndex = 7;
-        _btnSave.TabIndex = 8;
-        _btnCancel.TabIndex = 9;
+        _chkUseSessionAuth.TabIndex = 7;
+        _btnTest.TabIndex = 8;
+        _btnSave.TabIndex = 9;
+        _btnCancel.TabIndex = 10;
     }
 
     private static bool IsAutoStartEnabled()
     {
         try
         {
-            using var key = Registry.CurrentUser.OpenSubKey(StartupRegistryKey, false);
+            using var key = StartupRegistryRoot.OpenSubKey(StartupRegistryKey, false);
             var value = key?.GetValue(AppName);
             return value != null;
         }
@@ -197,7 +221,7 @@ public sealed class ConfigForm : Form
     {
         try
         {
-            using var key = Registry.CurrentUser.OpenSubKey(StartupRegistryKey, true);
+            using var key = StartupRegistryRoot.OpenSubKey(StartupRegistryKey, true);
             if (key == null) return;
 
             if (enabled)
@@ -229,7 +253,7 @@ public sealed class ConfigForm : Form
         }
         catch (Exception ex)
         {
-            AppendResult($"\n❌ Unexpected error: {ex.Message}", Color.OrangeRed);
+            AppendResult($"\n{Strings.TestUnexpectedError} {ex.Message}", Color.OrangeRed);
             _btnTest.Enabled = true;
         }
     }
@@ -244,61 +268,88 @@ public sealed class ConfigForm : Form
 
         try
         {
-            AppendResult($"Testing connection to: {baseUrl}");
+            AppendResult($"{Strings.TestConnectionTo} {baseUrl}");
             AppendResult(new string('-', 40));
 
             // Test 1: StatusPing
-            AppendResult("\n[1] Testing /StatusPing ...");
+            AppendResult($"\n{Strings.TestStatusPing}");
             var (pingOk, pingInfo) = await TestEndpointAsync(baseUrl, "StatusPing");
             if (pingOk)
             {
-                AppendResult($"    ✅ StatusPing OK", Color.LightGreen);
-                AppendResult($"    Response: {pingInfo}");
+                AppendResult(Strings.TestStatusPingOK, Color.LightGreen);
+                AppendResult($"{Strings.TestResponse} {pingInfo}");
             }
             else
             {
-                AppendResult($"    ❌ StatusPing FAILED: {pingInfo}", Color.OrangeRed);
+                AppendResult($"{Strings.TestStatusPingFailed} {pingInfo}", Color.OrangeRed);
             }
 
             // Test 2: gwinfo
-            AppendResult("\n[2] Testing /system/gwinfo ...");
+            AppendResult($"\n{Strings.TestGwinfo}");
             var (gwinfoOk, gwinfoInfo) = await TestEndpointAsync(baseUrl, "system/gwinfo");
             if (gwinfoOk)
             {
-                AppendResult($"    ✅ gwinfo OK", Color.LightGreen);
-                AppendResult($"    Response: {TruncateResponse(gwinfoInfo, 200)}");
+                AppendResult(Strings.TestGwinfoOK, Color.LightGreen);
+                AppendResult($"{Strings.TestResponse} {TruncateResponse(gwinfoInfo, 200)}");
             }
             else
             {
-                AppendResult($"    ❌ gwinfo FAILED: {gwinfoInfo}", Color.OrangeRed);
+                AppendResult($"{Strings.TestGwinfoFailed} {gwinfoInfo}", Color.OrangeRed);
             }
 
             // Test 3: Service
-            AppendResult($"\n[3] Testing Service: {_txtServiceName.Text} ...");
-            var (svcOk, svcInfo) = TestService(_txtServiceName.Text);
+            AppendResult($"\n{Strings.TestService} {_txtServiceName.Text} ...");
+            var (svcOk, svcInfo) = TestServiceStatus(_txtServiceName.Text);
             if (svcOk)
             {
-                AppendResult($"    ✅ Service OK: {svcInfo}", Color.LightGreen);
+                AppendResult($"{Strings.TestServiceOK} {svcInfo}", Color.LightGreen);
             }
             else
             {
-                AppendResult($"    ❌ Service FAILED: {svcInfo}", Color.OrangeRed);
+                AppendResult($"{Strings.TestServiceFailed} {svcInfo}", Color.OrangeRed);
+            }
+
+            // Test 4: Performance Metrics (only if session auth is enabled)
+            var perfOk = false;
+            if (_chkUseSessionAuth.Checked)
+            {
+                AppendResult($"\n{Strings.TestPerformance}");
+
+                if (string.IsNullOrWhiteSpace(_txtUsername.Text) || string.IsNullOrWhiteSpace(_txtPassword.Text))
+                {
+                    AppendResult(Strings.TestPerformanceSkipped, Color.Yellow);
+                }
+                else
+                {
+                    var (loginOk, perfInfo) = await TestSessionAuthAsync(baseUrl, _txtUsername.Text, _txtPassword.Text);
+                    if (loginOk)
+                    {
+                        AppendResult(Strings.TestSessionAuthOK, Color.LightGreen);
+                        AppendResult($"    {perfInfo}");
+                        perfOk = true;
+                    }
+                    else
+                    {
+                        AppendResult($"{Strings.TestSessionAuthFailed} {perfInfo}", Color.OrangeRed);
+                    }
+                }
             }
 
             // Summary
             AppendResult("\n" + new string('=', 40));
-            if (pingOk && svcOk)
+            var allOk = pingOk && svcOk && (!_chkUseSessionAuth.Checked || perfOk || string.IsNullOrWhiteSpace(_txtUsername.Text));
+            if (allOk)
             {
-                AppendResult("✅ All tests passed! Configuration is valid.", Color.LightGreen);
+                AppendResult(Strings.TestAllPassed, Color.LightGreen);
             }
             else
             {
-                AppendResult("⚠️ Some tests failed. Check your configuration.", Color.Yellow);
+                AppendResult(Strings.TestSomeFailed, Color.Yellow);
             }
         }
         catch (Exception ex)
         {
-            AppendResult($"\n❌ Error: {ex.Message}", Color.OrangeRed);
+            AppendResult($"\n{Strings.TestError} {ex.Message}", Color.OrangeRed);
         }
         finally
         {
@@ -330,7 +381,158 @@ public sealed class ConfigForm : Form
         }
     }
 
-    private static (bool ok, string info) TestService(string serviceName)
+    private async Task<(bool ok, string info)> TestSessionAuthAsync(string baseUrl, string username, string password)
+    {
+        try
+        {
+            // Create a new HttpClient with CookieContainer for session auth
+            using var handler = new HttpClientHandler
+            {
+                CookieContainer = new System.Net.CookieContainer(),
+                UseCookies = true
+            };
+            using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(10) };
+
+            var baseUri = new Uri(baseUrl.TrimEnd('/') + "/");
+
+            // Step 1: Try multiple login endpoints
+            string[] loginEndpoints = { "data/app/login", "web/login", "data/login", "login" };
+            bool loginSuccess = false;
+            string loginError = "";
+
+            foreach (var endpoint in loginEndpoints)
+            {
+                try
+                {
+                    var loginUrl = new Uri(baseUri, endpoint);
+                    var loginContent = new FormUrlEncodedContent(new[]
+                    {
+                        new KeyValuePair<string, string>("username", username),
+                        new KeyValuePair<string, string>("password", password)
+                    });
+
+                    using var loginResp = await client.PostAsync(loginUrl, loginContent);
+
+                    if (loginResp.IsSuccessStatusCode || 
+                        loginResp.StatusCode == System.Net.HttpStatusCode.Found ||
+                        loginResp.StatusCode == System.Net.HttpStatusCode.SeeOther)
+                    {
+                        loginSuccess = true;
+                        break;
+                    }
+
+                    // 401/403 means credentials wrong
+                    if (loginResp.StatusCode == System.Net.HttpStatusCode.Unauthorized ||
+                        loginResp.StatusCode == System.Net.HttpStatusCode.Forbidden)
+                    {
+                        loginError = $"{(int)loginResp.StatusCode} {loginResp.ReasonPhrase}";
+                        break;
+                    }
+
+                    // 404 = endpoint doesn't exist, try next
+                    loginError = $"{endpoint}: {(int)loginResp.StatusCode}";
+                }
+                catch (Exception ex)
+                {
+                    loginError = ex.Message;
+                }
+            }
+
+            if (!loginSuccess)
+            {
+                return (false, $"{Strings.TestLoginFailed} {loginError}");
+            }
+
+            // Step 2: Get performance metrics
+            var perfUrl = new Uri(baseUri, "data/api/v1/systemPerformance/currentGauges");
+            using var perfResp = await client.GetAsync(perfUrl);
+
+            // If session auth didn't work, try Basic Auth as fallback
+            if (!perfResp.IsSuccessStatusCode && !loginSuccess)
+            {
+                return await TestBasicAuthAsync(baseUrl, username, password);
+            }
+
+            if (!perfResp.IsSuccessStatusCode)
+            {
+                // Try Basic Auth as fallback
+                return await TestBasicAuthAsync(baseUrl, username, password);
+            }
+
+            var json = await perfResp.Content.ReadAsStringAsync();
+
+            // Parse the response
+            return ParsePerformanceResponse(json);
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.Message);
+        }
+    }
+
+    private async Task<(bool ok, string info)> TestBasicAuthAsync(string baseUrl, string username, string password)
+    {
+        try
+        {
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+            var credentials = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"{username}:{password}"));
+            client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", credentials);
+
+            var baseUri = new Uri(baseUrl.TrimEnd('/') + "/");
+            var perfUrl = new Uri(baseUri, "data/api/v1/systemPerformance/currentGauges");
+
+            using var perfResp = await client.GetAsync(perfUrl);
+
+            if (perfResp.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+            {
+                // 401 on both form login and basic auth = likely OIDC
+                return (false, $"{Strings.TestAuthAllMethodsFailed}\n    {Strings.TestAuthCheckCredentials}");
+            }
+
+            if (perfResp.StatusCode == System.Net.HttpStatusCode.Forbidden)
+            {
+                // 403 = endpoint exists but access denied
+                return (false, $"{Strings.TestAuthOidcRequired}");
+            }
+
+            if (!perfResp.IsSuccessStatusCode)
+            {
+                return (false, $"{Strings.TestPerfApiFailed} {(int)perfResp.StatusCode} {perfResp.ReasonPhrase}");
+            }
+
+            var json = await perfResp.Content.ReadAsStringAsync();
+            return ParsePerformanceResponse(json, " (Basic Auth)");
+        }
+        catch (Exception ex)
+        {
+            return (false, $"Basic Auth: {ex.Message}");
+        }
+    }
+
+    private static (bool ok, string info) ParsePerformanceResponse(string json, string suffix = "")
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+
+            var cpu = root.TryGetProperty("cpu", out var cpuEl) ? cpuEl.GetDouble() : 0;
+            var heapMemory = root.TryGetProperty("heapMemory", out var heapEl) ? heapEl.GetInt64() : 0;
+            var maxMemory = root.TryGetProperty("maxMemory", out var maxEl) ? maxEl.GetInt64() : 0;
+
+            var heapMB = heapMemory / 1024 / 1024;
+            var maxMB = maxMemory / 1024 / 1024;
+            var heapPercent = maxMemory > 0 ? Math.Round((double)heapMemory / maxMemory * 100, 1) : 0;
+
+            return (true, $"CPU: {cpu:F1}% | Heap: {heapPercent}% ({heapMB} MB / {maxMB} MB){suffix}");
+        }
+        catch
+        {
+            return (true, $"{Strings.TestRawResponse} {TruncateResponse(json, 100)}{suffix}");
+        }
+    }
+
+    private static (bool ok, string info) TestServiceStatus(string serviceName)
     {
         try
         {
@@ -368,19 +570,26 @@ public sealed class ConfigForm : Form
     {
         if (string.IsNullOrWhiteSpace(_txtServiceName.Text))
         {
-            MessageBox.Show("Service Name is required.", "Validation Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            MessageBox.Show(Strings.ValidationServiceNameRequired, Strings.ValidationError, MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
 
         if (string.IsNullOrWhiteSpace(_txtGatewayUrl.Text))
         {
-            MessageBox.Show("Gateway URL is required.", "Validation Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            MessageBox.Show(Strings.ValidationGatewayUrlRequired, Strings.ValidationError, MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
 
         if (!Uri.TryCreate(_txtGatewayUrl.Text, UriKind.Absolute, out _))
         {
-            MessageBox.Show("Gateway URL is not a valid URL.", "Validation Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            MessageBox.Show(Strings.ValidationGatewayUrlInvalid, Strings.ValidationError, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        // Validate session auth requires credentials
+        if (_chkUseSessionAuth.Checked && (string.IsNullOrWhiteSpace(_txtUsername.Text) || string.IsNullOrWhiteSpace(_txtPassword.Text)))
+        {
+            MessageBox.Show(Strings.ValidationSessionAuthCredentials, Strings.ValidationError, MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
 
@@ -391,13 +600,29 @@ public sealed class ConfigForm : Form
             PollIntervalMs = (int)_numPollInterval.Value,
             HttpTimeoutSeconds = (int)_numTimeout.Value,
             Username = string.IsNullOrWhiteSpace(_txtUsername.Text) ? null : _txtUsername.Text.Trim(),
-            Password = string.IsNullOrWhiteSpace(_txtPassword.Text) ? null : _txtPassword.Text
+            Password = string.IsNullOrWhiteSpace(_txtPassword.Text) ? null : _txtPassword.Text,
+            UseSessionAuth = _chkUseSessionAuth.Checked
         };
 
-        // Save to appsettings.json
+        // Save to appsettings.json with encrypted password
         try
         {
-            var json = JsonSerializer.Serialize(new { Gateway = Config }, new JsonSerializerOptions { WriteIndented = true });
+            // Create a copy for saving with encrypted password
+            var configToSave = new
+            {
+                Gateway = new
+                {
+                    Config.ServiceName,
+                    Config.GatewayBaseUrl,
+                    Config.PollIntervalMs,
+                    Config.HttpTimeoutSeconds,
+                    Config.Username,
+                    Password = PasswordProtection.Encrypt(Config.Password),  // Encrypt password for storage
+                    Config.UseSessionAuth
+                }
+            };
+
+            var json = JsonSerializer.Serialize(configToSave, new JsonSerializerOptions { WriteIndented = true });
             var path = System.IO.Path.Combine(AppContext.BaseDirectory, "appsettings.json");
             System.IO.File.WriteAllText(path, json);
 
@@ -406,21 +631,70 @@ public sealed class ConfigForm : Form
 
             ConfigSaved = true;
 
+            // Check if settings that require restart have changed
+            var needsRestart = HasConfigChanged();
+
             var autoStartMsg = _chkAutoStart.Checked 
-                ? "\n\n✅ Auto-start with Windows: Enabled" 
-                : "\n\n❌ Auto-start with Windows: Disabled";
+                ? Strings.SaveAutoStartEnabled 
+                : Strings.SaveAutoStartDisabled;
 
             var authMsg = Config.HasCredentials
-                ? "\n🔐 Authentication: Configured"
+                ? Strings.SaveAuthConfigured
                 : "";
 
-            MessageBox.Show($"Configuration saved successfully!{autoStartMsg}{authMsg}\n\nRestart the application to apply other changes.", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            var sessionAuthMsg = Config.UseSessionAuth
+                ? Strings.SaveSessionAuthEnabled
+                : "";
+
+            if (needsRestart)
+            {
+                var result = MessageBox.Show(
+                    $"{Strings.SaveSuccess}{autoStartMsg}{authMsg}{sessionAuthMsg}\n\n{Strings.RestartMessage}",
+                    Strings.RestartRequired,
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Question);
+
+                if (result == DialogResult.Yes)
+                {
+                    RestartRequested = true;
+                }
+            }
+            else
+            {
+                MessageBox.Show($"{Strings.SaveSuccess}{autoStartMsg}{authMsg}{sessionAuthMsg}", Strings.Success, MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+
             Close();
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"Failed to save configuration:\n{ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageBox.Show(string.Format(Strings.SaveErrorMessage, ex.Message), Strings.SaveError, MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
+    }
+
+    private bool HasConfigChanged()
+    {
+        return _originalConfig.ServiceName != Config.ServiceName ||
+               _originalConfig.GatewayBaseUrl != Config.GatewayBaseUrl ||
+               _originalConfig.PollIntervalMs != Config.PollIntervalMs ||
+               _originalConfig.HttpTimeoutSeconds != Config.HttpTimeoutSeconds ||
+               _originalConfig.Username != Config.Username ||
+               _originalConfig.Password != Config.Password ||
+               _originalConfig.UseSessionAuth != Config.UseSessionAuth;
+    }
+
+    private static AppConfig CloneConfig(AppConfig config)
+    {
+        return new AppConfig
+        {
+            ServiceName = config.ServiceName,
+            GatewayBaseUrl = config.GatewayBaseUrl,
+            PollIntervalMs = config.PollIntervalMs,
+            HttpTimeoutSeconds = config.HttpTimeoutSeconds,
+            Username = config.Username,
+            Password = config.Password,
+            UseSessionAuth = config.UseSessionAuth
+        };
     }
 
     protected override void Dispose(bool disposing)

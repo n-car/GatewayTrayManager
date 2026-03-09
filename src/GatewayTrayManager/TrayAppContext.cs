@@ -6,6 +6,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using ServiceManager;
+using GatewayTrayManager.Localization;
+using GatewayTrayManager.Security;
 using Timer = System.Windows.Forms.Timer;
 
 namespace GatewayTrayManager;
@@ -15,6 +17,7 @@ public sealed class TrayAppContext : ApplicationContext
     private readonly NotifyIcon _tray;
     private readonly ToolStripMenuItem _miService;
     private readonly ToolStripMenuItem _miGateway;
+    private readonly ToolStripMenuItem _miPerformance;
     private readonly ToolStripMenuItem _miStart;
     private readonly ToolStripMenuItem _miStop;
     private readonly ToolStripMenuItem _miRestart;
@@ -42,33 +45,36 @@ public sealed class TrayAppContext : ApplicationContext
             gatewayBaseUrl: cfg.GatewayBaseUrl,
             timeoutSeconds: cfg.HttpTimeoutSeconds,
             username: cfg.Username,
-            password: cfg.Password
+            password: cfg.Password,
+            useSessionAuth: cfg.UseSessionAuth
         );
 
-        _miService = new ToolStripMenuItem("🖥️ Service: (loading...)") { Enabled = false };
-        _miGateway = new ToolStripMenuItem("🌐 Gateway: (loading...)") { Enabled = false };
+        _miService = new ToolStripMenuItem($"{Strings.MenuService} {Strings.StatusLoading}") { Enabled = false };
+        _miGateway = new ToolStripMenuItem($"{Strings.MenuGateway} {Strings.StatusLoading}") { Enabled = false };
+        _miPerformance = new ToolStripMenuItem($"{Strings.MenuPerformance} {Strings.StatusNotAvailable}") { Enabled = false, Visible = cfg.UseSessionAuth };
 
-        _miStart = new ToolStripMenuItem("▶️ Start", null, (_, __) => ShowServiceOperation(GatewayServiceOperationForm.ServiceAction.Start));
-        _miStop = new ToolStripMenuItem("⏹️ Stop", null, (_, __) => ShowServiceOperation(GatewayServiceOperationForm.ServiceAction.Stop));
-        _miRestart = new ToolStripMenuItem("🔄 Restart", null, (_, __) => ShowServiceOperation(GatewayServiceOperationForm.ServiceAction.Restart));
+        _miStart = new ToolStripMenuItem(Strings.MenuStart, null, (_, __) => ShowServiceOperation(GatewayServiceOperationForm.ServiceAction.Start));
+        _miStop = new ToolStripMenuItem(Strings.MenuStop, null, (_, __) => ShowServiceOperation(GatewayServiceOperationForm.ServiceAction.Stop));
+        _miRestart = new ToolStripMenuItem(Strings.MenuRestart, null, (_, __) => ShowServiceOperation(GatewayServiceOperationForm.ServiceAction.Restart));
 
         var menu = new ContextMenuStrip();
         menu.Items.Add(_miService);
         menu.Items.Add(_miGateway);
+        menu.Items.Add(_miPerformance);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_miStart);
         menu.Items.Add(_miStop);
         menu.Items.Add(_miRestart);
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add(new ToolStripMenuItem("🌍 Open Gateway", null, (_, __) => OpenGateway(cfg.GatewayBaseUrl)));
-        menu.Items.Add(new ToolStripMenuItem("🔃 Refresh now", null, (_, __) => SafeRefresh()));
+        menu.Items.Add(new ToolStripMenuItem(Strings.MenuOpenGateway, null, (_, __) => OpenGateway(cfg.GatewayBaseUrl)));
+        menu.Items.Add(new ToolStripMenuItem(Strings.MenuRefresh, null, (_, __) => SafeRefresh()));
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add(new ToolStripMenuItem("⚙️ Configuration...", null, (_, __) => OpenConfigForm(cfg)));
-        menu.Items.Add(new ToolStripMenuItem("❌ Exit", null, (_, __) => Exit()));
+        menu.Items.Add(new ToolStripMenuItem(Strings.MenuConfiguration, null, (_, __) => OpenConfigForm(cfg)));
+        menu.Items.Add(new ToolStripMenuItem(Strings.MenuExit, null, (_, __) => Exit()));
 
         _tray = new NotifyIcon
         {
-            Text = "Gateway Tray Manager",
+            Text = Strings.AppName,
             Icon = TrayIconGenerator.CreateIcon(TrayIconGenerator.IconState.Warning), // Initial icon
             Visible = true,
             ContextMenuStrip = menu
@@ -130,6 +136,9 @@ public sealed class TrayAppContext : ApplicationContext
         if (appCfg.PollIntervalMs <= 0) appCfg.PollIntervalMs = 3000;
         if (appCfg.HttpTimeoutSeconds <= 0) appCfg.HttpTimeoutSeconds = 2;
 
+        // Decrypt password if encrypted
+        appCfg.Password = PasswordProtection.Decrypt(appCfg.Password);
+
         return appCfg;
     }
 
@@ -157,10 +166,45 @@ public sealed class TrayAppContext : ApplicationContext
         {
             using var form = new ConfigForm(currentConfig);
             form.ShowDialog();
+
+            // Check if restart was requested
+            if (form.RestartRequested)
+            {
+                RestartApplication();
+                return;
+            }
         }
         finally
         {
             _timer.Start();
+        }
+    }
+
+    private static void RestartApplication()
+    {
+        try
+        {
+            // Get the current executable path
+            var exePath = Environment.ProcessPath;
+            if (string.IsNullOrEmpty(exePath))
+            {
+                exePath = System.IO.Path.Combine(AppContext.BaseDirectory, "GatewayTrayManager.exe");
+            }
+
+            // Start new instance
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = exePath,
+                UseShellExecute = true
+            });
+
+            // Exit current instance
+            Application.Exit();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(string.Format(Strings.RestartErrorMessage, ex.Message),
+                Strings.RestartError, MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
     }
 
@@ -240,17 +284,34 @@ public sealed class TrayAppContext : ApplicationContext
 
         try
         {
-            _miService.Text = $"🖥️ Service: {snapshot.ServiceStatus}";
+            _miService.Text = $"{Strings.MenuService} {snapshot.ServiceStatus}";
             _miGateway.Text = snapshot.GatewayOk
-                ? $"🌐 Gateway: OK ({snapshot.GatewayInfo})"
-                : $"🌐 Gateway: FAIL ({snapshot.GatewayInfo})";
+                ? $"{Strings.MenuGateway} {Strings.StatusOK} ({snapshot.GatewayInfo})"
+                : $"{Strings.MenuGateway} {Strings.StatusFail} ({snapshot.GatewayInfo})";
+
+            // Update performance metrics if available
+            if (snapshot.HasPerformanceInfo)
+            {
+                var perf = snapshot.PerformanceInfo!;
+                _miPerformance.Text = $"📊 CPU: {perf.CpuUsagePercent:F1}% | Heap: {perf.MemoryUsagePercent}% ({perf.HeapMemoryMB}/{perf.MaxMemoryMB})";
+                _miPerformance.Visible = true;
+            }
+            else if (_miPerformance.Visible)
+            {
+                _miPerformance.Text = $"{Strings.MenuPerformance} {Strings.StatusUnavailable}";
+            }
 
             _miStart.Enabled = snapshot.CanStart;
             _miStop.Enabled = snapshot.CanStop;
             _miRestart.Enabled = snapshot.CanRestart;
 
             // Tooltip (max ~63 chars, keep short)
-            _tray.Text = $"Gateway {snapshot.ServiceStatus} | GW {(snapshot.GatewayOk ? "OK" : "FAIL")}";
+            var tooltipText = $"Gateway {snapshot.ServiceStatus} | GW {(snapshot.GatewayOk ? Strings.StatusOK : Strings.StatusFail)}";
+            if (snapshot.HasPerformanceInfo)
+            {
+                tooltipText = $"GW {(snapshot.GatewayOk ? Strings.StatusOK : Strings.StatusFail)} | CPU:{snapshot.PerformanceInfo!.CpuUsagePercent:F0}% Heap:{snapshot.PerformanceInfo.MemoryUsagePercent}%";
+            }
+            _tray.Text = tooltipText;
 
             // Icon - Gateway style flame with status indicator
             var iconState = snapshot.ServiceStatus switch
@@ -274,8 +335,8 @@ public sealed class TrayAppContext : ApplicationContext
                 }
                 else if (svcChanged || gwChanged)
                 {
-                    var title = "Gateway status changed";
-                    var msg = $"Service: {snapshot.ServiceStatus} | Gateway: {(snapshot.GatewayOk ? "OK" : "FAIL")} ({snapshot.GatewayInfo})";
+                    var title = Strings.GatewayStatusChanged;
+                    var msg = $"{Strings.MenuService} {snapshot.ServiceStatus} | Gateway: {(snapshot.GatewayOk ? Strings.StatusOK : Strings.StatusFail)} ({snapshot.GatewayInfo})";
                     var tipIcon = (snapshot.ServiceStatus == ServiceControllerStatus.Running && snapshot.GatewayOk) ? ToolTipIcon.Info : ToolTipIcon.Warning;
                     _tray.ShowBalloonTip(3000, title, msg, tipIcon);
                 }
@@ -356,6 +417,12 @@ public sealed class AppConfig
     // Optional authentication (leave empty if not required)
     public string? Username { get; set; }
     public string? Password { get; set; }
+
+    /// <summary>
+    /// When enabled, uses session-based authentication (login + cookie) to access
+    /// protected endpoints like /data/api/v1/gateway-info for detailed gateway metrics.
+    /// </summary>
+    public bool UseSessionAuth { get; set; } = false;
 
     public bool HasCredentials => !string.IsNullOrEmpty(Username) && !string.IsNullOrEmpty(Password);
 }

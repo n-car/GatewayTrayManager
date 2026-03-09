@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading;
 using System.Windows.Forms;
 using ServiceManager;
+using GatewayTrayManager.Localization;
 
 namespace GatewayTrayManager;
 
@@ -31,8 +32,8 @@ internal static class Program
             LogException("ThreadException", e.Exception);
             try
             {
-                MessageBox.Show($"An error occurred:\n{e.Exception.Message}\n\nDetails logged to crash.log", 
-                    "Gateway Tray Manager Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show(string.Format(Strings.ErrorOccurred, e.Exception.Message), 
+                    Strings.AppError, MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             catch { }
         };
@@ -44,8 +45,8 @@ internal static class Program
                 LogException("UnhandledException", ex);
                 try
                 {
-                    MessageBox.Show($"A fatal error occurred:\n{ex.Message}\n\nDetails logged to crash.log", 
-                        "Gateway Tray Manager Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    MessageBox.Show(string.Format(Strings.FatalErrorOccurred, ex.Message), 
+                        Strings.AppError, MessageBoxButtons.OK, MessageBoxIcon.Error);
                 }
                 catch { }
             }
@@ -67,9 +68,8 @@ internal static class Program
             {
                 // Another instance is already running
                 var result = MessageBox.Show(
-                    "Gateway Tray Manager is already running.\n\n" +
-                    "Do you want to close the existing instance and start a new one?",
-                    "Application Already Running",
+                    Strings.AppAlreadyRunningMessage,
+                    Strings.AppAlreadyRunning,
                     MessageBoxButtons.YesNo,
                     MessageBoxIcon.Question,
                     MessageBoxDefaultButton.Button2);
@@ -92,8 +92,8 @@ internal static class Program
                     }
 
                     MessageBox.Show(
-                        "Could not close the existing instance.\nPlease close it manually and try again.",
-                        "Error",
+                        Strings.CouldNotCloseInstance,
+                        Strings.SaveError,
                         MessageBoxButtons.OK,
                         MessageBoxIcon.Error);
                 }
@@ -106,8 +106,8 @@ internal static class Program
         catch (Exception ex)
         {
             LogException("Main", ex);
-            MessageBox.Show($"Failed to start application:\n{ex.Message}",
-                "Gateway Tray Manager Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageBox.Show(string.Format(Strings.FailedToStartApp, ex.Message),
+                Strings.AppError, MessageBoxButtons.OK, MessageBoxIcon.Error);
             return 1;
         }
         return 0;

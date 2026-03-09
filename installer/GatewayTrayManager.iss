@@ -2,7 +2,7 @@
 ; Requires Inno Setup 6.x - Download from https://jrsoftware.org/isinfo.php
 
 #define MyAppName "Gateway Tray Manager"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.1.0"
 #define MyAppPublisher "Nicola Carpanese"
 #define MyAppURL "https://github.com/n-car/GatewayTrayManager"
 #define MyAppExeName "GatewayTrayManager.exe"
@@ -37,14 +37,40 @@ UninstallDisplayIcon={app}\{#MyAppExeName}
 CloseApplications=force
 CloseApplicationsFilter=*.exe
 RestartApplications=yes
+; Upgrade detection - use same install directory as previous version
+UsePreviousAppDir=yes
+; Detect previous installations and allow upgrade
+UsePreviousGroup=yes
+UsePreviousTasks=yes
+; Update mode - allow upgrading existing installation
+UpdateUninstallLogAppName=no
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "italian"; MessagesFile: "compiler:Languages\Italian.isl"
 
+[CustomMessages]
+; English messages
+english.StartupOptions=Startup Options:
+english.StartAutomatically=Start automatically with Windows
+english.UpgradeMessage=%1 version %2 is already installed.%n%nDo you want to upgrade to version %3?%n%nYour settings will be preserved.
+english.AppRunningInstall=%1 is currently running.%n%nThe installer needs to close it to continue.%n%nClick OK to close the application automatically,%nor Cancel to exit the installer.
+english.AppRunningUninstall=%1 is currently running.%n%nThe uninstaller needs to close it to continue.%n%nClick OK to close the application automatically,%nor Cancel to exit the uninstaller.
+english.CouldNotClose=Could not close %1.%n%nPlease close it manually and run the installer again.
+english.CouldNotCloseUninstall=Could not close %1.%n%nPlease close it manually and run the uninstaller again.
+
+; Italian messages
+italian.StartupOptions=Opzioni di avvio:
+italian.StartAutomatically=Avvia automaticamente con Windows
+italian.UpgradeMessage=%1 versione %2 è già installato.%n%nVuoi aggiornare alla versione %3?%n%nLe tue impostazioni saranno preservate.
+italian.AppRunningInstall=%1 è attualmente in esecuzione.%n%nL'installer deve chiuderlo per continuare.%n%nClicca OK per chiudere l'applicazione automaticamente,%no Annulla per uscire dall'installer.
+italian.AppRunningUninstall=%1 è attualmente in esecuzione.%n%nIl programma di disinstallazione deve chiuderlo per continuare.%n%nClicca OK per chiudere l'applicazione automaticamente,%no Annulla per uscire.
+italian.CouldNotClose=Impossibile chiudere %1.%n%nChiudilo manualmente e riavvia l'installer.
+italian.CouldNotCloseUninstall=Impossibile chiudere %1.%n%nChiudilo manualmente e riavvia il programma di disinstallazione.
+
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
-Name: "startupicon"; Description: "Start automatically with Windows"; GroupDescription: "Startup Options:"; Flags: unchecked
+Name: "startupicon"; Description: "{cm:StartAutomatically}"; GroupDescription: "{cm:StartupOptions}"; Flags: unchecked
 
 [Files]
 ; Main application files (self-contained publish output)
@@ -74,6 +100,31 @@ Filename: "taskkill"; Parameters: "/F /IM {#MyAppExeName}"; Flags: runhidden; Ru
 Type: filesandordirs; Name: "{app}\logs"
 
 [Code]
+// Global variable to store previous version
+var
+  PreviousVersion: string;
+  IsUpgrade: Boolean;
+
+// Get the installed version from registry
+function GetInstalledVersion(): string;
+var
+  Version: string;
+begin
+  Result := '';
+  if RegQueryStringValue(HKLM, 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{#SetupSetting("AppId")}_is1', 
+                         'DisplayVersion', Version) then
+    Result := Version
+  else if RegQueryStringValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{#SetupSetting("AppId")}_is1', 
+                              'DisplayVersion', Version) then
+    Result := Version;
+end;
+
+// Check if previous version is installed
+function IsPreviousVersionInstalled(): Boolean;
+begin
+  Result := (GetInstalledVersion() <> '');
+end;
+
 // Check if a process is running by name
 function IsAppRunning(const FileName: string): Boolean;
 var
@@ -111,38 +162,51 @@ var
 begin
   Result := True;
   Attempts := 0;
-  
+
+  // Check for previous version
+  PreviousVersion := GetInstalledVersion();
+  IsUpgrade := (PreviousVersion <> '');
+
+  if IsUpgrade then
+  begin
+    // Show upgrade message
+    Response := MsgBox(FmtMessage(CustomMessage('UpgradeMessage'), ['{#MyAppName}', PreviousVersion, '{#MyAppVersion}']),
+                       mbConfirmation, MB_YESNO);
+
+    if Response = IDNO then
+    begin
+      Result := False;
+      Exit;
+    end;
+  end;
+
   // Check if the application is running
   while IsAppRunning('{#MyAppExeName}') and (Attempts < 3) do
   begin
     if Attempts = 0 then
     begin
-      Response := MsgBox('{#MyAppName} is currently running.' + #13#10 + #13#10 +
-                         'The installer needs to close it to continue.' + #13#10 + #13#10 +
-                         'Click OK to close the application automatically,' + #13#10 +
-                         'or Cancel to exit the installer.',
+      Response := MsgBox(FmtMessage(CustomMessage('AppRunningInstall'), ['{#MyAppName}']),
                          mbConfirmation, MB_OKCANCEL);
-      
+
       if Response = IDCANCEL then
       begin
         Result := False;
         Exit;
       end;
     end;
-    
+
     // Try to kill the application
     KillApp('{#MyAppExeName}');
     Attempts := Attempts + 1;
-    
+
     // Wait and check again
     Sleep(500);
   end;
-  
+
   // Final check
   if IsAppRunning('{#MyAppExeName}') then
   begin
-    MsgBox('Could not close {#MyAppName}.' + #13#10 + #13#10 +
-           'Please close it manually and run the installer again.',
+    MsgBox(FmtMessage(CustomMessage('CouldNotClose'), ['{#MyAppName}']),
            mbError, MB_OK);
     Result := False;
   end;
@@ -154,29 +218,25 @@ var
   Response: Integer;
 begin
   Result := True;
-  
+
   // Check if the application is running
   if IsAppRunning('{#MyAppExeName}') then
   begin
-    Response := MsgBox('{#MyAppName} is currently running.' + #13#10 + #13#10 +
-                       'The uninstaller needs to close it to continue.' + #13#10 + #13#10 +
-                       'Click OK to close the application automatically,' + #13#10 +
-                       'or Cancel to exit the uninstaller.',
+    Response := MsgBox(FmtMessage(CustomMessage('AppRunningUninstall'), ['{#MyAppName}']),
                        mbConfirmation, MB_OKCANCEL);
-    
+
     if Response = IDCANCEL then
     begin
       Result := False;
       Exit;
     end;
-    
+
     // Try to kill the application
     if not KillApp('{#MyAppExeName}') then
     begin
       if IsAppRunning('{#MyAppExeName}') then
       begin
-        MsgBox('Could not close {#MyAppName}.' + #13#10 + #13#10 +
-               'Please close it manually and run the uninstaller again.',
+        MsgBox(FmtMessage(CustomMessage('CouldNotCloseUninstall'), ['{#MyAppName}']),
                mbError, MB_OK);
         Result := False;
         Exit;

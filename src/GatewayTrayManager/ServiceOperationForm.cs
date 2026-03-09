@@ -7,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using ServiceManager;
+using GatewayTrayManager.Localization;
 
 namespace GatewayTrayManager;
 
@@ -23,27 +24,27 @@ public sealed class GatewayServiceOperationForm : ServiceOperationForm
     {
         _gatewayUrl = gatewayUrl.TrimEnd('/') + "/";
         _http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
-        Text = $"Gateway Service - {action}";
+        Text = string.Format(Strings.ServiceOperationTitle, action);
     }
 
     protected override string GetOperationText(ServiceAction action) => action switch
     {
-        ServiceAction.Start => "▶️ Starting Gateway Service...",
-        ServiceAction.Stop => "⏹️ Stopping Gateway Service...",
-        ServiceAction.Restart => "🔄 Restarting Gateway Service...",
-        _ => "Processing..."
+        ServiceAction.Start => Strings.OperationStart,
+        ServiceAction.Stop => Strings.OperationStop,
+        ServiceAction.Restart => Strings.OperationRestart,
+        _ => Strings.OperationProcessing
     };
 
     protected override async Task OnServiceStartedAsync()
     {
-        UpdateTrayIcon(TrayIconGenerator.IconState.Warning, "Gateway starting...");
+        UpdateTrayIcon(TrayIconGenerator.IconState.Warning, Strings.WaitingForGateway.Replace("🌐 ", "").TrimEnd('.'));
         await WaitForGatewayReadyAsync();
     }
 
     private async Task WaitForGatewayReadyAsync()
     {
-        UpdateStatus("🌐 Waiting for Gateway to be ready...");
-        UpdateDetails("Checking /StatusPing endpoint...");
+        UpdateStatus(Strings.WaitingForGateway);
+        UpdateDetails(Strings.CheckingStatusPing);
 
         var timeout = TimeSpan.FromSeconds(120);
         var startTime = DateTime.Now;
@@ -67,8 +68,8 @@ public sealed class GatewayServiceOperationForm : ServiceOperationForm
 
                 if (status == 503)
                 {
-                    UpdateStatus($"🌐 Gateway starting{dots} - {elapsed:F0}s");
-                    UpdateDetails("Service Unavailable (503) - Gateway is initializing...");
+                    UpdateStatus(string.Format(Strings.GatewayStarting, dots, elapsed.ToString("F0")));
+                    UpdateDetails(Strings.ServiceUnavailable503);
                     lastError = "503 Service Unavailable";
                 }
                 else if (status >= 200 && status < 400)
@@ -83,60 +84,60 @@ public sealed class GatewayServiceOperationForm : ServiceOperationForm
                             var state = stateElement.GetString();
                             if (state == "RUNNING")
                             {
-                                UpdateStatus("✅ Gateway is RUNNING");
+                                UpdateStatus(Strings.GatewayIsRunning);
                                 UpdateDetails("");
-                                UpdateTrayIcon(TrayIconGenerator.IconState.Running, "Gateway running | Status OK");
+                                UpdateTrayIcon(TrayIconGenerator.IconState.Running, Strings.GatewayRunningStatusOK);
                                 return;
                             }
                             else
                             {
-                                UpdateStatus($"🌐 Gateway state: {state}{dots} - {elapsed:F0}s");
-                                UpdateDetails($"Waiting for RUNNING state...");
+                                UpdateStatus(string.Format(Strings.GatewayState, state, dots, elapsed.ToString("F0")));
+                                UpdateDetails(Strings.WaitingForRunning);
                                 lastError = $"State: {state}";
                             }
                         }
                         else
                         {
-                            UpdateStatus("✅ Gateway is responding");
+                            UpdateStatus(Strings.GatewayIsResponding);
                             UpdateDetails("");
-                            UpdateTrayIcon(TrayIconGenerator.IconState.Running, "Gateway running | Status OK");
+                            UpdateTrayIcon(TrayIconGenerator.IconState.Running, Strings.GatewayRunningStatusOK);
                             return;
                         }
                     }
                     catch
                     {
-                        UpdateStatus("✅ Gateway is responding");
+                        UpdateStatus(Strings.GatewayIsResponding);
                         UpdateDetails("");
-                        UpdateTrayIcon(TrayIconGenerator.IconState.Running, "Gateway running | Status OK");
+                        UpdateTrayIcon(TrayIconGenerator.IconState.Running, Strings.GatewayRunningStatusOK);
                         return;
                     }
                 }
                 else
                 {
-                    UpdateStatus($"🌐 Waiting for Gateway{dots} - {elapsed:F0}s");
-                    UpdateDetails($"HTTP {status} - Gateway not ready yet...");
+                    UpdateStatus(string.Format(Strings.WaitingForGatewayDots, dots, elapsed.ToString("F0")));
+                    UpdateDetails(string.Format(Strings.GatewayNotReadyYet, status));
                     lastError = $"HTTP {status}";
                 }
             }
             catch (HttpRequestException ex)
             {
-                UpdateStatus($"🌐 Waiting for Gateway{dots} - {elapsed:F0}s");
-                UpdateDetails("Connection refused - Gateway not listening yet...");
+                UpdateStatus(string.Format(Strings.WaitingForGatewayDots, dots, elapsed.ToString("F0")));
+                UpdateDetails(Strings.ConnectionRefused);
                 lastError = ex.Message;
             }
             catch (TaskCanceledException) when (!Cts.Token.IsCancellationRequested)
             {
-                UpdateStatus($"🌐 Waiting for Gateway{dots} - {elapsed:F0}s");
-                UpdateDetails("Request timeout - Gateway slow to respond...");
-                lastError = "Request timeout";
+                UpdateStatus(string.Format(Strings.WaitingForGatewayDots, dots, elapsed.ToString("F0")));
+                UpdateDetails(Strings.RequestTimeout);
+                lastError = Strings.RequestTimeout;
             }
 
             await Task.Delay(1000, Cts.Token);
         }
 
-        UpdateStatus("⚠️ Gateway check timed out");
-        UpdateDetails($"Service is running but gateway didn't respond. Last error: {lastError}");
-        UpdateTrayIcon(TrayIconGenerator.IconState.Warning, "Gateway running | Status timeout");
+        UpdateStatus(Strings.GatewayCheckTimeout);
+        UpdateDetails(string.Format(Strings.ServiceRunningGatewayNoResponse, lastError));
+        UpdateTrayIcon(TrayIconGenerator.IconState.Warning, Strings.GatewayRunningStatusTimeout);
         await Task.Delay(2000, Cts.Token);
     }
 
