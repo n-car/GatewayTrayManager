@@ -2,7 +2,7 @@
 ; Requires Inno Setup 6.x - Download from https://jrsoftware.org/isinfo.php
 
 #define MyAppName "Gateway Tray Manager"
-#define MyAppVersion "1.1.1"
+#define MyAppVersion "1.1.2"
 #define MyAppPublisher "Nicola Carpanese"
 #define MyAppURL "https://github.com/n-car/GatewayTrayManager"
 #define MyAppExeName "GatewayTrayManager.exe"
