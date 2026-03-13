@@ -58,6 +58,8 @@ english.AppRunningInstall=%1 is currently running.%n%nThe installer needs to clo
 english.AppRunningUninstall=%1 is currently running.%n%nThe uninstaller needs to close it to continue.%n%nClick OK to close the application automatically,%nor Cancel to exit the uninstaller.
 english.CouldNotClose=Could not close %1.%n%nPlease close it manually and run the installer again.
 english.CouldNotCloseUninstall=Could not close %1.%n%nPlease close it manually and run the uninstaller again.
+english.DeleteConfigTitle=Delete Configuration?
+english.DeleteConfigMessage=Do you want to delete the configuration file (appsettings.json)?%n%nThis file contains your settings (Gateway URL, credentials, etc.).%n%nClick Yes to delete it, or No to keep it for future installations.
 
 ; Italian messages
 italian.StartupOptions=Opzioni di avvio:
@@ -67,6 +69,8 @@ italian.AppRunningInstall=%1 è attualmente in esecuzione.%n%nL'installer deve c
 italian.AppRunningUninstall=%1 è attualmente in esecuzione.%n%nIl programma di disinstallazione deve chiuderlo per continuare.%n%nClicca OK per chiudere l'applicazione automaticamente,%no Annulla per uscire.
 italian.CouldNotClose=Impossibile chiudere %1.%n%nChiudilo manualmente e riavvia l'installer.
 italian.CouldNotCloseUninstall=Impossibile chiudere %1.%n%nChiudilo manualmente e riavvia il programma di disinstallazione.
+italian.DeleteConfigTitle=Eliminare la configurazione?
+italian.DeleteConfigMessage=Vuoi eliminare il file di configurazione (appsettings.json)?%n%nQuesto file contiene le tue impostazioni (URL Gateway, credenziali, ecc.).%n%nClicca Sì per eliminarlo, o No per conservarlo per future installazioni.
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
@@ -247,7 +251,22 @@ end;
 
 // Clean up registry on uninstall
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  ConfigPath: string;
 begin
+  if CurUninstallStep = usUninstall then
+  begin
+    // Ask user if they want to delete the configuration file
+    ConfigPath := ExpandConstant('{app}\appsettings.json');
+    if FileExists(ConfigPath) then
+    begin
+      if MsgBox(CustomMessage('DeleteConfigMessage'), mbConfirmation, MB_YESNO) = IDYES then
+      begin
+        DeleteFile(ConfigPath);
+      end;
+    end;
+  end;
+
   if CurUninstallStep = usPostUninstall then
   begin
     // Remove startup registry entry

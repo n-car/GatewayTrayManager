@@ -26,7 +26,8 @@ public sealed class GatewayMonitor : ServiceMonitor
     private readonly string? _username;
     private readonly string? _password;
     private readonly bool _useSessionAuth;
-    private bool _isAuthenticated;
+    private readonly object _authLock = new();
+    private volatile bool _isAuthenticated;
 
     public GatewayMonitor(string serviceName, string gatewayBaseUrl, int timeoutSeconds, 
         string? username = null, string? password = null, bool useSessionAuth = false)
@@ -305,16 +306,19 @@ public sealed class GatewayMonitor : ServiceMonitor
     {
         try
         {
-            var cookies = source.GetCookies(uri);
-            if (_http.DefaultRequestHeaders.Contains("Cookie"))
+            lock (_authLock)
             {
-                _http.DefaultRequestHeaders.Remove("Cookie");
-            }
+                var cookies = source.GetCookies(uri);
+                if (_http.DefaultRequestHeaders.Contains("Cookie"))
+                {
+                    _http.DefaultRequestHeaders.Remove("Cookie");
+                }
 
-            var cookieHeader = string.Join("; ", cookies.Cast<System.Net.Cookie>().Select(c => $"{c.Name}={c.Value}"));
-            if (!string.IsNullOrEmpty(cookieHeader))
-            {
-                _http.DefaultRequestHeaders.Add("Cookie", cookieHeader);
+                var cookieHeader = string.Join("; ", cookies.Cast<System.Net.Cookie>().Select(c => $"{c.Name}={c.Value}"));
+                if (!string.IsNullOrEmpty(cookieHeader))
+                {
+                    _http.DefaultRequestHeaders.Add("Cookie", cookieHeader);
+                }
             }
         }
         catch

@@ -35,11 +35,12 @@ public sealed class TrayAppContext : ApplicationContext
     private readonly string _serviceName;
     private readonly string _gatewayUrl;
     private readonly SynchronizationContext? _syncContext;
+    private readonly object _refreshLock = new();
 
     private bool _lastGatewayOk;
     private ServiceControllerStatus? _lastServiceStatus;
-    private bool _isDisposed;
-    private bool _isRefreshing;
+    private volatile bool _isDisposed;
+    private volatile bool _isRefreshing;
     private bool _heapAlertInitialized;
     private HeapAlertState _heapAlertState = HeapAlertState.Normal;
     private HeapAlertState? _pendingHeapState;
@@ -105,10 +106,14 @@ public sealed class TrayAppContext : ApplicationContext
 
     private void SafeRefresh(bool showBalloonOnChange = false)
     {
-        // Prevent concurrent refreshes
-        if (_isDisposed || _isRefreshing) return;
+        // Thread-safe check to prevent concurrent refreshes
+        if (_isDisposed) return;
 
-        _isRefreshing = true;
+        lock (_refreshLock)
+        {
+            if (_isRefreshing) return;
+            _isRefreshing = true;
+        }
 
         // Fire and forget with error handling to prevent crashes
         _ = Task.Run(async () =>
@@ -116,22 +121,44 @@ public sealed class TrayAppContext : ApplicationContext
             try
             {
                 if (_isDisposed) return;
-                await RefreshAsync(showBalloonOnChange);
+                await RefreshAsync(showBalloonOnChange).ConfigureAwait(false);
             }
             catch (ObjectDisposedException)
             {
                 // App is closing, ignore
             }
+            catch (TaskCanceledException)
+            {
+                // HTTP timeout or cancellation, ignore
+            }
+            catch (OperationCanceledException)
+            {
+                // Cancellation, ignore
+            }
             catch (Exception ex)
             {
-                // Log error silently - don't crash the app
-                System.Diagnostics.Debug.WriteLine($"Refresh error: {ex.Message}");
+                // Log error to crash.log for debugging
+                LogError("SafeRefresh", ex);
             }
             finally
             {
                 _isRefreshing = false;
             }
         });
+    }
+
+    private static void LogError(string source, Exception ex)
+    {
+        try
+        {
+            var logPath = System.IO.Path.Combine(AppContext.BaseDirectory, "crash.log");
+            var entry = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {source}: {ex.GetType().Name}: {ex.Message}\n{ex.StackTrace}\n\n";
+            System.IO.File.AppendAllText(logPath, entry);
+        }
+        catch
+        {
+            // Ignore logging errors
+        }
     }
 
     private static AppConfig LoadConfig()
@@ -556,6 +583,19 @@ public sealed class TrayAppContext : ApplicationContext
         try
         {
             _timer.Stop();
+        }
+        catch { }
+
+        // Wait for any pending refresh to complete (max 2 seconds)
+        var waitCount = 0;
+        while (_isRefreshing && waitCount < 20)
+        {
+            Thread.Sleep(100);
+            waitCount++;
+        }
+
+        try
+        {
             _timer.Dispose();
         }
         catch { }
@@ -581,9 +621,20 @@ public sealed class TrayAppContext : ApplicationContext
         if (disposing && !_isDisposed)
         {
             _isDisposed = true;
-            _timer?.Dispose();
-            _monitor?.Dispose();
-            _tray?.Dispose();
+
+            try { _timer?.Stop(); } catch { }
+
+            // Wait for refresh to complete
+            var waitCount = 0;
+            while (_isRefreshing && waitCount < 20)
+            {
+                Thread.Sleep(100);
+                waitCount++;
+            }
+
+            try { _timer?.Dispose(); } catch { }
+            try { _monitor?.Dispose(); } catch { }
+            try { _tray?.Dispose(); } catch { }
         }
         base.Dispose(disposing);
     }
