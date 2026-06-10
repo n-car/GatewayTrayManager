@@ -47,18 +47,3 @@ This will:
 
 The installer will be created in `installer/output/`:
 - `GatewayTrayManager_Setup_1.1.2.exe`
-
-## Customization
-
-Edit `GatewayTrayManager.iss` to change:
-- `MyAppVersion` - Application version
-- `MyAppPublisher` - Your company name
-- `MyAppURL` - Your website/repository URL
-- `AppId` - Unique GUID for the application
-
-## Icon
-
-Place your application icon (`app.ico`) in:
-- `src\GatewayTrayManager\Resources\app.ico`
-
-If not provided, the installer will use the default icon.
