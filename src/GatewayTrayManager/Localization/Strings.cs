@@ -100,6 +100,7 @@ public static class Strings
         : "Failed to restart application:\n{0}\n\nPlease restart manually.";
     public static string SaveError => IsItalian ? "Errore" : "Error";
     public static string SaveErrorMessage => IsItalian ? "Impossibile salvare la configurazione:\n{0}" : "Failed to save configuration:\n{0}";
+    public static string SaveElevatedFailed => IsItalian ? "Salvataggio elevato annullato o non riuscito. Conferma il prompt UAC per salvare le impostazioni." : "Elevated save was canceled or failed. Confirm the UAC prompt to save settings.";
     public static string Success => IsItalian ? "Successo" : "Success";
 
     // === Test Connection ===

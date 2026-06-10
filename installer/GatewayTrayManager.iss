@@ -20,6 +20,9 @@ AppUpdatesURL={#MyAppURL}
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 AllowNoIcons=yes
+; Application is published as win-x64, so install and registry writes must use the 64-bit view
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
 ; Require admin privileges for installation (needed for service management)
 PrivilegesRequired=admin
 ; PrivilegesRequiredOverridesAllowed=dialog  ; Disabled - admin only
@@ -88,6 +91,10 @@ Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Registry]
+; Remove legacy 32-bit startup entry written by older installers before writing the x64 entry
+Root: HKLM32; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "{#MyAppName}"; Flags: deletevalue; Check: IsWin64
+; Remove existing x64 startup entry when the startup task is not selected during install/upgrade
+Root: HKLM; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "{#MyAppName}"; Flags: deletevalue; Check: ShouldDeleteStartupEntry
 ; Add to Windows startup if selected
 Root: HKLM; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "{#MyAppName}"; ValueData: """{app}\{#MyAppExeName}"""; Flags: uninsdeletevalue; Tasks: startupicon
 
@@ -108,6 +115,11 @@ Type: filesandordirs; Name: "{app}\logs"
 var
   PreviousVersion: string;
   IsUpgrade: Boolean;
+
+function ShouldDeleteStartupEntry(): Boolean;
+begin
+  Result := not WizardIsTaskSelected('startupicon');
+end;
 
 // Get the installed version from registry
 function GetInstalledVersion(): string;
