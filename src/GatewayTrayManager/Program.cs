@@ -24,6 +24,12 @@ internal static class Program
             return ServiceControlHelper.ExecuteFromArgs(args);
         }
 
+        // Check for elevated configuration save mode.
+        if (ConfigurationSaveCommand.IsSaveConfigMode(args))
+        {
+            return ConfigurationSaveCommand.ExecuteFromArgs(args);
+        }
+
         // Global exception handlers to prevent silent crashes
         Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
 

@@ -36,6 +36,7 @@ What started as a quick "weekend project" turned out to be surprisingly more use
 - ⚙️ **Configuration UI** - Easy configuration without editing files
 - 🚀 **Auto-start** - Option to start with Windows
 - 🔐 **Basic Auth Support** - Optional authentication for gateway API
+- 🔑 **Session Auth Support** - Optional session-based auth for protected performance metrics
 
 ## 📸 Tray Icon States
 
@@ -59,7 +60,9 @@ The icon changes color based on status:
 ### Option 2: Portable
 1. Download the portable ZIP from [Releases](../../releases)
 2. Extract to any folder
-3. Run `GatewayTrayManager.exe` as Administrator
+3. Run `GatewayTrayManager.exe`
+
+The app normally runs without elevation. Windows will show a UAC prompt only when an operation needs administrator rights.
 
 ## ⚙️ Configuration
 
@@ -73,6 +76,7 @@ Right-click tray icon → **Configuration...**
 | HTTP Timeout | API timeout (seconds) | `2` |
 | Username | (Optional) Basic auth username | - |
 | Password | (Optional) Basic auth password | - |
+| Session Auth | Use session auth for performance metrics | Off |
 | Heap Warning | Warning threshold for heap usage (%) | `75` |
 | Heap Critical | Critical threshold for heap usage (%) | `85` |
 | Heap Recovery | Recovery threshold for heap usage (%) | `70` |
@@ -100,6 +104,8 @@ Configuration is saved to `appsettings.json`:
   }
 }
 ```
+
+Saving configuration from the installed app writes to the installation directory and updates the Windows startup setting under HKLM. If the app is not already elevated, it requests UAC only for the save operation.
 
 ## 🔧 Building from Source
 
@@ -135,7 +141,7 @@ cd installer
 & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" GatewayTrayManager.iss
 ```
 
-Output: `installer/output/GatewayTrayManager_Setup_1.0.0.exe`
+Output: `installer/output/GatewayTrayManager_Setup_1.1.2.exe`
 
 ## 📁 Project Structure
 
@@ -155,6 +161,8 @@ GatewayTrayManager/
 │       ├── TrayAppContext.cs        # Tray icon and menu
 │       ├── GatewayMonitor.cs        # Service + HTTP monitoring
 │       ├── ConfigForm.cs            # Configuration dialog
+│       ├── ConfigurationSaveCommand.cs # Elevated config save command
+│       ├── StartupManager.cs        # Windows startup registry handling
 │       ├── ServiceOperationForm.cs  # Gateway-specific operations
 │       └── Resources/app.ico        # Application icon
 │
@@ -174,7 +182,9 @@ GatewayTrayManager/
 │  ├── GatewayMonitor      → Service + HTTP health monitoring │
 │  ├── GatewayServiceOperationForm → Operations with Gateway  │
 │  │                          health check after start        │
-│  └── ConfigForm          → User configuration               │
+│  ├── ConfigForm          → User configuration               │
+│  ├── ConfigurationSaveCommand → Elevated config save         │
+│  └── StartupManager      → HKLM startup registry handling   │
 └─────────────────────────────────────────────────────────────┘
                               │ inherits
                               ▼
@@ -197,11 +207,13 @@ The application uses **on-demand elevation** for a better user experience:
 | View service status | ❌ No | No |
 | View Gateway HTTP status | ❌ No | No |
 | Start / Stop / Restart service | ✅ Yes | Yes, when needed |
+| Save configuration | ✅ Yes | Yes, when needed |
+| Enable / disable auto-start | ✅ Yes | Yes, when needed |
 
 **How it works:**
 - The app runs as a **normal user** (no UAC at startup)
 - When you request a service operation, it **automatically elevates** via UAC
-- A separate elevated process performs the operation
+- When you save settings, a separate elevated process writes `appsettings.json` and updates the HKLM startup registry entry
 - The main app remains at normal privileges
 
 This approach is more secure than running the entire app as Administrator.

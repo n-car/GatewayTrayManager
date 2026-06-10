@@ -24,27 +24,29 @@ This will:
 
 ### Option 2: Manual Build
 
-1. **Publish the application:**
+1. **Publish the application from the repository root:**
    ```powershell
-   dotnet publish src\GatewayTrayManager\GatewayTrayManager.csproj -c Release -r win-x64 --self-contained true
+   dotnet publish src\GatewayTrayManager\GatewayTrayManager.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
    ```
 
-2. **Open Inno Setup Compiler** and compile `GatewayTrayManager.iss`
+2. **Open Inno Setup Compiler** and compile `installer\GatewayTrayManager.iss`
 
 ## Installer Features
 
 - ✅ Self-contained (no .NET runtime required on target machine)
-- ✅ Requires administrator privileges (for service management)
+- ✅ x64-compatible installer
+- ✅ Requires administrator privileges (for Program Files and HKLM startup registry)
 - ✅ Creates Start Menu shortcuts
 - ✅ Optional Desktop shortcut
 - ✅ Optional Windows startup entry
+- ✅ Preserves existing `appsettings.json` during upgrades
 - ✅ Clean uninstall
 - ✅ Multi-language support (English, Italian)
 
 ## Output
 
 The installer will be created in `installer/output/`:
-- `GatewayTrayManager_Setup_1.0.0.exe`
+- `GatewayTrayManager_Setup_1.1.2.exe`
 
 ## Customization
 

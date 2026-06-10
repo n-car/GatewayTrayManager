@@ -1,6 +1,5 @@
 using System;
 using System.Drawing;
-using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -8,7 +7,6 @@ using System.Globalization;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows.Forms;
-using Microsoft.Win32;
 using ServiceManager;
 using GatewayTrayManager.Localization;
 using GatewayTrayManager.Security;
@@ -17,12 +15,6 @@ namespace GatewayTrayManager;
 
 public sealed class ConfigForm : Form
 {
-    private const string AppName = "Gateway Tray Manager";
-    private const string StartupRegistryKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
-
-    // Use HKLM for auto-start (same as installer) - requires admin rights
-    private static readonly RegistryKey StartupRegistryRoot = Registry.LocalMachine;
-
     private readonly TextBox _txtServiceName;
     private readonly TextBox _txtGatewayUrl;
     private readonly TextBox _txtUsername;
@@ -120,7 +112,7 @@ public sealed class ConfigForm : Form
         {
             Text = Strings.ConfigAutoStart,
             Dock = DockStyle.Fill,
-            Checked = IsAutoStartEnabled(),
+            Checked = StartupManager.IsAutoStartEnabled(),
             AutoSize = true
         };
         mainPanel.Controls.Add(_chkAutoStart, 0, 6);
@@ -270,48 +262,6 @@ public sealed class ConfigForm : Form
         _btnTest.TabIndex = 13;
         _btnSave.TabIndex = 14;
         _btnCancel.TabIndex = 15;
-    }
-
-    private static bool IsAutoStartEnabled()
-    {
-        try
-        {
-            using var key = StartupRegistryRoot.OpenSubKey(StartupRegistryKey, false);
-            var value = key?.GetValue(AppName);
-            return value != null;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    private static void SetAutoStart(bool enabled)
-    {
-        try
-        {
-            using var key = StartupRegistryRoot.OpenSubKey(StartupRegistryKey, true);
-            if (key == null) return;
-
-            if (enabled)
-            {
-                // Use Environment.ProcessPath for single-file apps, fallback to BaseDirectory
-                var exePath = Environment.ProcessPath;
-                if (string.IsNullOrEmpty(exePath))
-                {
-                    exePath = Path.Combine(AppContext.BaseDirectory, "GatewayTrayManager.exe");
-                }
-                key.SetValue(AppName, $"\"{exePath}\"");
-            }
-            else
-            {
-                key.DeleteValue(AppName, false);
-            }
-        }
-        catch
-        {
-            // Ignore registry errors
-        }
     }
 
     private async void OnTestButtonClick(object? sender, EventArgs e)
@@ -918,11 +868,7 @@ public sealed class ConfigForm : Form
             };
 
             var json = JsonSerializer.Serialize(configToSave, new JsonSerializerOptions { WriteIndented = true });
-            var path = System.IO.Path.Combine(AppContext.BaseDirectory, "appsettings.json");
-            System.IO.File.WriteAllText(path, json);
-
-            // Save auto-start setting to registry
-            SetAutoStart(_chkAutoStart.Checked);
+            ConfigurationSaveCommand.Save(json, _chkAutoStart.Checked);
 
             ConfigSaved = true;
 
