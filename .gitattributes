@@ -1,0 +1,12 @@
+# Keep text files normalized to LF to avoid platform-specific line-ending churn.
+* text=auto eol=lf
+
+# Binary files must never be line-ending normalized.
+*.ico binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.exe binary
+*.dll binary
+*.pdb binary
