@@ -141,7 +141,7 @@ cd installer
 & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" GatewayTrayManager.iss
 ```
 
-Output: `installer/output/GatewayTrayManager_Setup_1.1.2.exe`
+Output: `installer/output/GatewayTrayManager_Setup_1.1.3.exe`
 
 ## 📁 Project Structure
 

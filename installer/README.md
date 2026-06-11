@@ -46,4 +46,4 @@ This will:
 ## Output
 
 The installer will be created in `installer/output/`:
-- `GatewayTrayManager_Setup_1.1.2.exe`
+- `GatewayTrayManager_Setup_1.1.3.exe`
